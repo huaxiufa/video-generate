@@ -82,7 +82,16 @@ def render(video,cues,shot,progress=None):
         subprocess.run(["ffmpeg","-y","-i",str(video),"-vf",f"tpad=stop_mode=clone:stop_duration={target-vdur:.3f}","-t",f"{target:.3f}","-an","-c:v","libx264","-pix_fmt","yuv420p",str(ext)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT); base=ext
     final=OUT/f"shot_{sid:03d}_final.mp4"
     sf=f"subtitles={sp}:force_style='FontName=Noto Sans CJK SC,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=40'"
-    subprocess.run(["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",sf,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)
+    cmd=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",sf,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
+    proc=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+    if proc.returncode!=0:
+        log=OUT/f"shot_{sid:03d}_ffmpeg_error.log"
+        log.write_text(proc.stderr[-12000:],encoding="utf-8")
+        fallback=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",f"subtitles=filename='{sp}'","-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
+        proc2=subprocess.run(fallback,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        if proc2.returncode!=0:
+            log.write_text(log.read_text(encoding="utf-8")+"\n\n--- FALLBACK ---\n"+proc2.stderr[-12000:],encoding="utf-8")
+            raise RuntimeError(f"FFmpeg 字幕合成失败（exit {proc2.returncode}）。详细日志：{log}")
     return final
 def generate_shot(api_key,base_url,model,shot,voices,settings=None,progress=None):
     v=generate_video(api_key,base_url,model,shot,progress); cues=make_timeline(shot,voices,settings or {},progress); return render(v,cues,shot,progress),cues
