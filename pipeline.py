@@ -67,6 +67,8 @@ def srt(cues,p):
         ms=int(round(x*1000)); h,ms=divmod(ms,3600000); m,ms=divmod(ms,60000); s,ms=divmod(ms,1000); return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
     with open(p,"w",encoding="utf-8") as f:
         for i,c in enumerate(cues,1): f.write(f"{i}\n{ts(c['start'])} --> {ts(c['end'])}\n{c['text']}\n\n")
+    if not p.exists() or p.stat().st_size==0:
+        raise RuntimeError(f"SRT 字幕文件生成失败：{p}")
 def render(video,cues,shot,progress=None):
     sid=shot["id"]; sp=OUT/f"shot_{sid:03d}.srt"; srt(cues,sp); vdur=probe(video); end=max([c["end"] for c in cues],default=0)+.25; target=max(vdur,end)
     al=OUT/f"shot_{sid:03d}_audio.txt"; audio=AUDIO/f"shot_{sid:03d}_mix.wav"
@@ -81,13 +83,20 @@ def render(video,cues,shot,progress=None):
         ext=OUT/f"shot_{sid:03d}_extended.mp4"
         subprocess.run(["ffmpeg","-y","-i",str(video),"-vf",f"tpad=stop_mode=clone:stop_duration={target-vdur:.3f}","-t",f"{target:.3f}","-an","-c:v","libx264","-pix_fmt","yuv420p",str(ext)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT); base=ext
     final=OUT/f"shot_{sid:03d}_final.mp4"
-    sf=f"subtitles={sp}:force_style='FontName=Noto Sans CJK SC,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=40'"
+    # libass occasionally fails to resolve files under a bind-mounted /app/output path.
+    # Copy the SRT to /tmp and use the explicit filename option with UTF-8.
+    subtitle_tmp=Path("/tmp")/f"shot_{sid:03d}.srt"
+    subtitle_tmp.write_bytes(sp.read_bytes())
+    if not subtitle_tmp.exists() or subtitle_tmp.stat().st_size==0:
+        raise RuntimeError(f"临时 SRT 字幕文件不可用：{subtitle_tmp}")
+    sf=f"subtitles=filename='{subtitle_tmp}':charenc=UTF-8:force_style='FontName=Noto Sans CJK SC,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=40'"
     cmd=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",sf,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
     proc=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     if proc.returncode!=0:
         log=OUT/f"shot_{sid:03d}_ffmpeg_error.log"
         log.write_text(proc.stderr[-12000:],encoding="utf-8")
-        fallback=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",f"subtitles=filename='{sp}'","-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
+        # Second attempt: omit style options and use the temp SRT path.
+        fallback=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",f"subtitles=filename='{subtitle_tmp}':charenc=UTF-8","-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
         proc2=subprocess.run(fallback,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         if proc2.returncode!=0:
             log.write_text(log.read_text(encoding="utf-8")+"\n\n--- FALLBACK ---\n"+proc2.stderr[-12000:],encoding="utf-8")
@@ -95,45 +104,27 @@ def render(video,cues,shot,progress=None):
     return final
 def generate_shot(api_key,base_url,model,shot,voices,settings=None,progress=None):
     v=generate_video(api_key,base_url,model,shot,progress); cues=make_timeline(shot,voices,settings or {},progress); return render(v,cues,shot,progress),cues
-
 def list_chinese_voices():
     import asyncio
-    async def _load():
-        return await edge_tts.list_voices()
+    async def _load(): return await edge_tts.list_voices()
     voices=asyncio.run(_load())
     return [v["ShortName"] for v in voices if v.get("Locale","").lower().startswith("zh-cn")]
-
 def synthesize_preview(text, voice):
     path=AUDIO/"voice_preview.mp3"
     asyncio.run(tts(text,voice,path,{"rate":"+0%","pitch":"+0Hz","volume":"+0%"}))
     return str(path)
-
 def generate_character_voice_pack(voices, settings=None, progress=None):
     import zipfile, json
-    settings=settings or {}
-    pack=ROOT/"output"/"night-agency-voices"
-    pack.mkdir(parents=True,exist_ok=True)
-    samples={
-        "林默":"时间不对。",
-        "苏晚":"先别猜，证据呢？",
-        "顾言":"我查到了监控记录。",
-        "零":"有些案子，结了才是真的开始。",
-        "韩成":"先别碰现场。",
-        "警员":"已经确认身份了。",
-        "沈哲":"我知道他来了。",
-        "陈凯":"我只是回来拿一样东西。",
-        "周启":"我什么都不知道。"
-    }
+    settings=settings or {}; pack=ROOT/"output"/"night-agency-voices"; pack.mkdir(parents=True,exist_ok=True)
+    samples={"林默":"时间不对。","苏晚":"先别猜，证据呢？","顾言":"我查到了监控记录。","零":"有些案子，结了才是真的开始。","韩成":"先别碰现场。","警员":"已经确认身份了。","沈哲":"我知道他来了。","陈凯":"我只是回来拿一样东西。","周启":"我什么都不知道。"}
     manifest={}
-    for role, voice in voices.items():
+    for role,voice in voices.items():
         if progress: progress(f"生成 {role} 的声音")
         cfg=settings.get(role,{"rate":"+0%","pitch":"+0Hz","volume":"+0%"})
-        mp3=pack/f"{role}.mp3"
-        asyncio.run(tts(samples.get(role,"这是一段角色声音试听。"),voice,mp3,cfg))
+        mp3=pack/f"{role}.mp3"; asyncio.run(tts(samples.get(role,"这是一段角色声音试听。"),voice,mp3,cfg))
         manifest[role]={"voice":voice,"sample_text":samples.get(role,"这是一段角色声音试听。"),"settings":cfg,"file":mp3.name}
     (pack/"voices.json").write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding="utf-8")
     zip_path=ROOT/"output"/"night-agency-voices.zip"
     with zipfile.ZipFile(zip_path,"w",zipfile.ZIP_DEFLATED) as z:
-        for p in sorted(pack.iterdir()):
-            z.write(p,p.relative_to(pack))
+        for p in sorted(pack.iterdir()): z.write(p,p.relative_to(pack))
     return zip_path, manifest
