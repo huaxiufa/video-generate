@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 import streamlit as st
-from pipeline import DEFAULT_VOICES, generate_shot
+from pipeline import DEFAULT_VOICES, generate_shot, list_chinese_voices, synthesize_preview
 from script_parser import analyze_script, save_storyboard
 
 ROOT=Path(__file__).resolve().parent; DATA=ROOT/"cache"; DATA.mkdir(exist_ok=True)
@@ -15,6 +15,10 @@ def load(p,d):
     except:return d
 
 project=load(SETTINGS,{"voices":DEFAULT_VOICES.copy(),"voice_settings":{}})
+try:
+    VOICE_OPTIONS=list_chinese_voices()
+except Exception:
+    VOICE_OPTIONS=sorted(set(DEFAULT_VOICES.values()))
 with st.sidebar:
     st.header("Agnes 设置")
     api_key=st.text_input("Agnes API Key",type="password")
@@ -23,9 +27,17 @@ with st.sidebar:
     video_model=st.text_input("动画 Video Model","agnes-video-2.5-flash")
     st.divider(); st.header("角色声音（全项目复用）")
     for role in list(project["voices"]):
-        project["voices"][role]=st.text_input(role,project["voices"][role],key="voice_"+role)
+        current=project["voices"].get(role, DEFAULT_VOICES.get(role, VOICE_OPTIONS[0]))
+        if current not in VOICE_OPTIONS: VOICE_OPTIONS=[current]+VOICE_OPTIONS
+        project["voices"][role]=st.selectbox(role,VOICE_OPTIONS,index=VOICE_OPTIONS.index(current),key="voice_"+role)
         cfg=project["voice_settings"].get(role,{})
         project["voice_settings"][role]={"rate":st.text_input(role+" 语速",cfg.get("rate","+0%"),key="rate_"+role),"pitch":st.text_input(role+" 音高",cfg.get("pitch","+0Hz"),key="pitch_"+role),"volume":"+0%"}
+    if st.button("试听当前角色"):
+        role=st.selectbox("试听角色",list(project["voices"]),key="preview_role")
+        try:
+            preview=synthesize_preview("这是一段声音试听。",project["voices"][role])
+            st.audio(preview,format="audio/mp3")
+        except Exception as e: st.error(f"试听失败：{e}")
     if st.button("保存声音配置"):
         SETTINGS.write_text(json.dumps(project,ensure_ascii=False,indent=2),encoding="utf-8"); st.success("已保存")
 
