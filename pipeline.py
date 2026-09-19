@@ -86,3 +86,15 @@ def render(video,cues,shot,progress=None):
     return final
 def generate_shot(api_key,base_url,model,shot,voices,settings=None,progress=None):
     v=generate_video(api_key,base_url,model,shot,progress); cues=make_timeline(shot,voices,settings or {},progress); return render(v,cues,shot,progress),cues
+
+def list_chinese_voices():
+    import asyncio
+    async def _load():
+        return await edge_tts.list_voices()
+    voices=asyncio.run(_load())
+    return [v["ShortName"] for v in voices if v.get("Locale","").lower().startswith("zh-cn")]
+
+def synthesize_preview(text, voice):
+    path=AUDIO/"voice_preview.mp3"
+    asyncio.run(tts(text,voice,path,{"rate":"+0%","pitch":"+0Hz","volume":"+0%"}))
+    return str(path)
