@@ -54,11 +54,31 @@ def generate_video(api_key,base_url,model,shot,progress=None):
     return silent
 async def tts(text,voice,path,cfg):
     await edge_tts.Communicate(text,voice,rate=cfg.get("rate","+0%"),pitch=cfg.get("pitch","+0Hz"),volume=cfg.get("volume","+0%")).save(str(path))
+def normalize_dialogue(shot):
+    raw=shot.get("dialogue")
+    if raw is None: raw=shot.get("dialogues",[])
+    if isinstance(raw,str):
+        raw=[{"role":"林默","text":raw}]
+    elif isinstance(raw,dict):
+        raw=[raw]
+    result=[]
+    for item in raw or []:
+        if isinstance(item,str):
+            result.append({"role":"林默","text":item})
+            continue
+        if not isinstance(item,dict): continue
+        role=item.get("role") or item.get("speaker") or item.get("character") or item.get("name") or "林默"
+        text=item.get("text") or item.get("line") or item.get("dialogue") or item.get("content") or ""
+        if isinstance(text,str) and text.strip():
+            result.append({"role":str(role), "text":text.strip()})
+    return result
 def make_timeline(shot,voices,settings,progress=None):
+    dialogues=normalize_dialogue(shot)
+    if progress: progress("TTS",f"Shot {shot['id']:03d}：识别到 {len(dialogues)} 句对白")
     cues=[]; cursor=.35
-    for i,d in enumerate(shot.get("dialogue",[])):
+    for i,d in enumerate(dialogues):
         p=AUDIO/f"shot_{shot['id']:03d}_{i:02d}.mp3"; role=d["role"]; cfg=settings.get(role,{})
-        if progress: progress("TTS",f"{role} 配音 {i+1}/{len(shot.get('dialogue',[]))}")
+        if progress: progress("TTS",f"{role} 配音 {i+1}/{len(dialogues)}")
         asyncio.run(tts(d["text"],voices.get(role,DEFAULT_VOICES.get(role,"zh-CN-YunxiNeural")),p,cfg))
         dur=probe(p); cues.append({"role":role,"text":d["text"],"audio":str(p),"start":cursor,"end":cursor+dur,"duration":dur}); cursor+=dur+.14
     return cues
@@ -67,8 +87,8 @@ def srt(cues,p):
         ms=int(round(x*1000)); h,ms=divmod(ms,3600000); m,ms=divmod(ms,60000); s,ms=divmod(ms,1000); return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
     with open(p,"w",encoding="utf-8") as f:
         for i,c in enumerate(cues,1): f.write(f"{i}\n{ts(c['start'])} --> {ts(c['end'])}\n{c['text']}\n\n")
-    if not p.exists() or p.stat().st_size==0:
-        raise RuntimeError(f"SRT 字幕文件生成失败：{p}")
+    if not p.exists(): raise RuntimeError(f"SRT 字幕文件无法创建：{p}")
+    if cues and p.stat().st_size==0: raise RuntimeError(f"SRT 字幕文件为空：{p}")
 def render(video,cues,shot,progress=None):
     sid=shot["id"]; sp=OUT/f"shot_{sid:03d}.srt"; srt(cues,sp); vdur=probe(video); end=max([c["end"] for c in cues],default=0)+.25; target=max(vdur,end)
     al=OUT/f"shot_{sid:03d}_audio.txt"; audio=AUDIO/f"shot_{sid:03d}_mix.wav"
@@ -83,19 +103,13 @@ def render(video,cues,shot,progress=None):
         ext=OUT/f"shot_{sid:03d}_extended.mp4"
         subprocess.run(["ffmpeg","-y","-i",str(video),"-vf",f"tpad=stop_mode=clone:stop_duration={target-vdur:.3f}","-t",f"{target:.3f}","-an","-c:v","libx264","-pix_fmt","yuv420p",str(ext)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT); base=ext
     final=OUT/f"shot_{sid:03d}_final.mp4"
-    # libass occasionally fails to resolve files under a bind-mounted /app/output path.
-    # Copy the SRT to /tmp and use the explicit filename option with UTF-8.
     subtitle_tmp=Path("/tmp")/f"shot_{sid:03d}.srt"
     subtitle_tmp.write_bytes(sp.read_bytes())
-    if not subtitle_tmp.exists() or subtitle_tmp.stat().st_size==0:
-        raise RuntimeError(f"临时 SRT 字幕文件不可用：{subtitle_tmp}")
     sf=f"subtitles=filename='{subtitle_tmp}':charenc=UTF-8:force_style='FontName=Noto Sans CJK SC,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=40'"
     cmd=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",sf,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
     proc=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     if proc.returncode!=0:
-        log=OUT/f"shot_{sid:03d}_ffmpeg_error.log"
-        log.write_text(proc.stderr[-12000:],encoding="utf-8")
-        # Second attempt: omit style options and use the temp SRT path.
+        log=OUT/f"shot_{sid:03d}_ffmpeg_error.log"; log.write_text(proc.stderr[-12000:],encoding="utf-8")
         fallback=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",f"subtitles=filename='{subtitle_tmp}':charenc=UTF-8","-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
         proc2=subprocess.run(fallback,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         if proc2.returncode!=0:
