@@ -35,19 +35,43 @@ def gemini_tts(text, voice, path, profile, api_key, model=GEMINI_TTS_MODEL, prog
     return wav_path
 
 def post_json(url,payload,headers,progress=None):
-    for i in range(7):
+    # Agnes 队列繁忙时采用可控退避：优先尊重 Retry-After，最长单次等待 90 秒。
+    max_attempts = 7
+    for i in range(max_attempts):
         try:
             r=requests.post(url,json=payload,headers=headers,timeout=360)
-            if r.ok:return r.json()
-            body=r.text[:1000]; retry=r.status_code in (408,425,429,500,502,503,504) or "queue_full" in body.lower() or "queue is full" in body.lower()
-            if retry and i<6:
-                if progress: progress("Agnes",f"服务繁忙，{15*(i+1)} 秒后重试")
-                time.sleep(15*(i+1)); continue
-            raise RuntimeError(f"Agnes HTTP {r.status_code}: {body}")
+            if r.ok:
+                return r.json()
+            body=r.text[:1500]
+            retryable = (
+                r.status_code in (408,425,429,500,502,503,504)
+                or "queue_full" in body.lower()
+                or "queue is full" in body.lower()
+                or "too many requests" in body.lower()
+                or "temporarily unavailable" in body.lower()
+            )
+            if not retryable or i >= max_attempts-1:
+                raise RuntimeError(f"Agnes HTTP {r.status_code}: {body}")
+            retry_after=r.headers.get("Retry-After")
+            try:
+                wait=float(retry_after) if retry_after else 0
+            except ValueError:
+                wait=0
+            if wait <= 0:
+                wait=min(90,10*(2**i))
+            wait=max(3,min(90,int(wait)))
+            reason="队列繁忙" if r.status_code==429 or "queue" in body.lower() else f"HTTP {r.status_code}"
+            if progress:
+                progress("Agnes",f"{reason}，第 {i+1}/{max_attempts} 次重试，{wait} 秒后重试")
+            time.sleep(wait)
         except requests.RequestException as e:
-            if i>=6: raise
-            if progress: progress("Agnes",f"网络异常，稍后重试：{e}")
-            time.sleep(15*(i+1))
+            if i>=max_attempts-1:
+                raise RuntimeError(f"Agnes 网络请求失败：{e}") from e
+            wait=min(90,10*(2**i))
+            if progress:
+                progress("Agnes",f"网络异常，第 {i+1}/{max_attempts} 次重试，{wait} 秒后重试：{e}")
+            time.sleep(wait)
+    raise RuntimeError("Agnes 请求重试次数已用尽")
 
 def probe(p):
     return float(subprocess.check_output(["ffprobe","-v","error","-show_entries","format=duration","-of","default=nw=1:nk=1",str(p)],text=True).strip())
