@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import zipfile, tempfile
 import streamlit as st
 from pipeline import DEFAULT_VOICES, generate_shot, list_chinese_voices, synthesize_preview, generate_character_voice_pack
 from script_parser import analyze_script, save_storyboard
@@ -32,6 +33,27 @@ with st.sidebar:
         project["voices"][role]=st.selectbox(role,VOICE_OPTIONS,index=VOICE_OPTIONS.index(current),key="voice_"+role)
         cfg=project["voice_settings"].get(role,{})
         project["voice_settings"][role]={"rate":st.text_input(role+" 语速",cfg.get("rate","+0%"),key="rate_"+role),"pitch":st.text_input(role+" 音高",cfg.get("pitch","+0Hz"),key="pitch_"+role),"volume":"+0%"}
+    st.markdown("### 📦 导入角色声音包")
+    voice_zip=st.file_uploader("上传 night-agency-voices.zip",type=["zip"],key="voice_zip")
+    if voice_zip is not None and st.button("⬆️ 导入并覆盖角色声音",key="import_voice_pack"):
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                zp=Path(td)/"voices.zip"
+                zp.write_bytes(voice_zip.getvalue())
+                with zipfile.ZipFile(zp) as z: z.extractall(td)
+                candidates=list(Path(td).rglob("voices.json"))
+                if not candidates: raise RuntimeError("声音包中没有 voices.json")
+                manifest=json.loads(candidates[0].read_text("utf-8"))
+                imported=0
+                for role,info in manifest.items():
+                    if role in project["voices"] and info.get("voice"):
+                        project["voices"][role]=info["voice"]
+                        if info.get("settings"): project["voice_settings"][role]=info["settings"]
+                        imported+=1
+                SETTINGS.write_text(json.dumps(project,ensure_ascii=False,indent=2),encoding="utf-8")
+                st.success(f"已导入 {imported} 个角色声音。请刷新页面确认。")
+        except Exception as e:
+            st.error(f"声音包导入失败：{e}")
     if st.button("试听当前角色"):
         role=st.selectbox("试听角色",list(project["voices"]),key="preview_role")
         try:
