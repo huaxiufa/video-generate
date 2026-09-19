@@ -1,0 +1,11 @@
+services:
+  agnes-video-generator:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - ./output:/app/output
+      - ./audio:/app/audio
+      - ./cache:/app/cache
