@@ -9,94 +9,101 @@ GEMINI_VOICES={"林默":"Leda","苏晚":"Iapetus","顾言":"Schedar","零":"Char
 GEMINI_VOICE_PROFILES={"林默":"young male, cool and clean, mid-low register, slightly breathy, restrained, observant; slow measured pace; never hot-blooded or anime-like","苏晚":"young female, clear and cool, rational and evidence-first, medium register, slightly brisk; not sweet, not sexy","顾言":"male, mid-low, dry and relaxed, technical/nerdy, concise with mild dry humor","零":"male, low-mid, calm, slow, mysterious with a slight smile; not villainous, not gangster, not CEO","韩成":"male detective, thick low-mid, slightly tired, professional and realistic; never shouting","警员":"ordinary young adult male, medium register, slightly fast and nervous; realistic, not heroic or comic","沈哲":"ordinary office worker, medium register, tired, realistic, restrained","陈凯":"ordinary colleague, medium register, slightly fast and nervous, evasive but not villainous","周启":"finance supervisor, calm, warm and polite, controlled low-mid voice, normal sounding; gradually colder under pressure, never cartoon-villain"}
 GEMINI_TTS_MODEL="gemini-3.1-flash-tts-preview"
 
+def _extract_gemini_audio(data):
+    """兼容 Interactions API 的不同音频返回结构。"""
+    audio=(data.get("output_audio") or {}).get("data")
+    if audio:
+        return audio
+    for step in data.get("steps") or []:
+        for content in step.get("content") or []:
+            if isinstance(content,dict) and content.get("data"):
+                if content.get("type") in (None,"audio"):
+                    return content["data"]
+        delta=step.get("delta") or {}
+        if isinstance(delta,dict) and delta.get("data") and delta.get("type") in (None,"audio"):
+            return delta["data"]
+    return None
+
 def gemini_tts(text, voice, path, profile, api_key, model=GEMINI_TTS_MODEL, progress=None):
     if not api_key:
         raise RuntimeError("未配置 Gemini API Key")
-    prompt = (
+    prompt=(
         "Synthesize speech only. Do not return text. "
         "Keep the exact Chinese dialogue and do not add words. "
         f"Character voice profile: {profile}. "
         "Natural pauses, restrained acting, realistic Chinese delivery. "
-        "Spoken transcript: " + text
+        "Spoken transcript: "+text
     )
-    payload = {
-        "model": model,
-        "input": prompt,
-        "response_format": {
-            "type": "audio",
-            "delivery": "inline",
-            "mime_type": "audio/l16",
-            "sample_rate": 24000
-        },
-        "generation_config": {"speech_config": [{"voice": voice}]}
+    # 某些 Gemini TTS 接入端不接受显式 delivery/mime_type/sample_rate，
+    # 而官方 REST 示例只要求 response_format.type=audio；因此这里保持最小请求体。
+    payload={
+        "model":model,
+        "input":prompt,
+        "response_format":{"type":"audio"},
+        "generation_config":{"speech_config":[{"voice":voice}]}
     }
-    if progress:
-        progress("Gemini TTS", f"生成 {voice} 语音")
+    if progress: progress("Gemini TTS",f"生成 {voice} 语音")
     headers={"x-goog-api-key":api_key,"Content-Type":"application/json","Api-Revision":"2026-05-20"}
     last_error=""
     for attempt in range(5):
         try:
-            r=requests.post("https://generativelanguage.googleapis.com/v1beta/interactions",
-                            headers=headers,json=payload,timeout=180)
+            r=requests.post("https://generativelanguage.googleapis.com/v1beta/interactions",headers=headers,json=payload,timeout=180)
             if r.ok:
                 data=r.json()
-                audio_b64=(data.get("output_audio") or {}).get("data")
+                audio_b64=_extract_gemini_audio(data)
                 if audio_b64:
                     import base64, wave
-                    pcm=base64.b64decode(audio_b64)
+                    try:
+                        pcm=base64.b64decode(audio_b64,validate=True)
+                    except Exception as e:
+                        last_error=f"Gemini TTS 音频 Base64 无法解码：{e}"
+                        pcm=b""
                     if pcm:
                         wav_path=Path(path).with_suffix(".wav")
-                        with wave.open(str(wav_path),"wb") as wf:
-                            wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(24000); wf.writeframes(pcm)
-                        return wav_path
-                last_error=f"Gemini TTS 返回 completed 但没有 output_audio.data：{json.dumps(data,ensure_ascii=False)[:5000]}"
+                        if len(pcm)%2:
+                            last_error=f"Gemini TTS 返回的 L16 PCM 长度异常：{len(pcm)} 字节"
+                        else:
+                            with wave.open(str(wav_path),"wb") as wf:
+                                wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(24000); wf.writeframes(pcm)
+                            if wav_path.exists() and wav_path.stat().st_size>44:
+                                return wav_path
+                            last_error="Gemini TTS 已返回音频，但生成的 WAV 无效"
+                if not last_error:
+                    last_error=f"Gemini TTS 返回 completed 但没有可识别的音频数据：{json.dumps(data,ensure_ascii=False)[:5000]}"
             else:
                 last_error=f"Gemini TTS HTTP {r.status_code}: {r.text[:3000]}"
+                # 400 属于请求参数错误，不需要无意义地重复相同请求。
+                if r.status_code==400:
+                    break
         except Exception as e:
             last_error=f"Gemini TTS 请求异常：{e}"
-        if attempt < 4:
+        if attempt<4:
             wait=min(20,3*(2**attempt))
-            if progress:
-                progress("Gemini TTS",f"音频响应异常，第 {attempt+1}/5 次重试，{wait} 秒后重试")
+            if progress: progress("Gemini TTS",f"音频响应异常，第 {attempt+1}/5 次重试，{wait} 秒后重试")
             time.sleep(wait)
     raise RuntimeError(last_error)
 
 def post_json(url,payload,headers,progress=None):
-    # Agnes 队列繁忙时采用可控退避：优先尊重 Retry-After，最长单次等待 90 秒。
-    max_attempts = 7
+    max_attempts=7
     for i in range(max_attempts):
         try:
             r=requests.post(url,json=payload,headers=headers,timeout=360)
-            if r.ok:
-                return r.json()
+            if r.ok: return r.json()
             body=r.text[:1500]
-            retryable = (
-                r.status_code in (408,425,429,500,502,503,504)
-                or "queue_full" in body.lower()
-                or "queue is full" in body.lower()
-                or "too many requests" in body.lower()
-                or "temporarily unavailable" in body.lower()
-            )
-            if not retryable or i >= max_attempts-1:
-                raise RuntimeError(f"Agnes HTTP {r.status_code}: {body}")
+            retryable=(r.status_code in (408,425,429,500,502,503,504) or "queue_full" in body.lower() or "queue is full" in body.lower() or "too many requests" in body.lower() or "temporarily unavailable" in body.lower())
+            if not retryable or i>=max_attempts-1: raise RuntimeError(f"Agnes HTTP {r.status_code}: {body}")
             retry_after=r.headers.get("Retry-After")
-            try:
-                wait=float(retry_after) if retry_after else 0
-            except ValueError:
-                wait=0
-            if wait <= 0:
-                wait=min(90,10*(2**i))
+            try: wait=float(retry_after) if retry_after else 0
+            except ValueError: wait=0
+            if wait<=0: wait=min(90,10*(2**i))
             wait=max(3,min(90,int(wait)))
             reason="队列繁忙" if r.status_code==429 or "queue" in body.lower() else f"HTTP {r.status_code}"
-            if progress:
-                progress("Agnes",f"{reason}，第 {i+1}/{max_attempts} 次重试，{wait} 秒后重试")
+            if progress: progress("Agnes",f"{reason}，第 {i+1}/{max_attempts} 次重试，{wait} 秒后重试")
             time.sleep(wait)
         except requests.RequestException as e:
-            if i>=max_attempts-1:
-                raise RuntimeError(f"Agnes 网络请求失败：{e}") from e
+            if i>=max_attempts-1: raise RuntimeError(f"Agnes 网络请求失败：{e}") from e
             wait=min(90,10*(2**i))
-            if progress:
-                progress("Agnes",f"网络异常，第 {i+1}/{max_attempts} 次重试，{wait} 秒后重试：{e}")
+            if progress: progress("Agnes",f"网络异常，第 {i+1}/{max_attempts} 次重试，{wait} 秒后重试：{e}")
             time.sleep(wait)
     raise RuntimeError("Agnes 请求重试次数已用尽")
 
@@ -112,7 +119,7 @@ def generate_video(api_key,base_url,model,shot,progress=None):
         if progress: progress("Agnes",f"提交 Shot {shot['id']:03d}")
         res=post_json(base_url.rstrip("/")+"/videos",payload,h,progress); vid=res.get("video_id") or res.get("id")
         if not vid: raise RuntimeError(f"没有 video_id: {res}")
-        data[str(shot["id"])]={"video_id":vid}; tasks.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8")
+        data[str(shot["id"])]= {"video_id":vid}; tasks.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8")
     if not url:
         deadline=time.time()+int(os.getenv("AGNES_POLL_TIMEOUT","1800"))
         while time.time()<deadline:
@@ -164,15 +171,9 @@ def make_timeline(shot,voices,settings,progress=None,tts_provider="edge",gemini_
         if progress: progress("TTS",f"{role} 配音 {i+1}/{len(dialogues)}")
         voice=GEMINI_VOICES.get(role,"Kore") if tts_provider=="gemini" else voices.get(role,DEFAULT_VOICES.get(role,"zh-CN-YunxiNeural"))
         profile=GEMINI_VOICE_PROFILES.get(role,"realistic Chinese character voice") if tts_provider=="gemini" else ""
-        cache_payload=json.dumps({
-            "provider":tts_provider,
-            "model":gemini_model if tts_provider=="gemini" else "edge",
-            "role":role,"text":d["text"],"voice":voice,"profile":profile,
-            "settings":cfg if tts_provider!="gemini" else {}
-        },ensure_ascii=False,sort_keys=True)
+        cache_payload=json.dumps({"provider":tts_provider,"model":gemini_model if tts_provider=="gemini" else "edge","role":role,"text":d["text"],"voice":voice,"profile":profile,"settings":cfg if tts_provider!="gemini" else {}},ensure_ascii=False,sort_keys=True)
         cache_key=hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()[:24]
-        cache_path=cache_dir/f"{cache_key}.wav"
-        p=AUDIO/f"shot_{shot['id']:03d}_{i:02d}.wav"
+        cache_path=cache_dir/f"{cache_key}.wav"; p=AUDIO/f"shot_{shot['id']:03d}_{i:02d}.wav"
         if cache_path.exists():
             if progress: progress("TTS缓存",f"命中缓存：{role}，不再调用 TTS")
             shutil.copyfile(cache_path,p)
@@ -180,18 +181,13 @@ def make_timeline(shot,voices,settings,progress=None,tts_provider="edge",gemini_
             if tts_provider=="gemini":
                 generated=gemini_tts(d["text"],voice,p,profile,gemini_api_key,gemini_model,progress)
             else:
-                edge_path=AUDIO/f"shot_{shot['id']:03d}_{i:02d}_edge.mp3"
-                asyncio.run(tts(d["text"],voice,edge_path,cfg))
+                edge_path=AUDIO/f"shot_{shot['id']:03d}_{i:02d}_edge.mp3"; asyncio.run(tts(d["text"],voice,edge_path,cfg))
                 generated=edge_path
-                subprocess.run(["ffmpeg","-y","-i",str(generated),"-ar","48000","-ac","2","-c:a","pcm_s16le",str(p)],
-                               check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)
-                generated=p
+                subprocess.run(["ffmpeg","-y","-i",str(generated),"-ar","48000","-ac","2","-c:a","pcm_s16le",str(p)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT); generated=p
             shutil.copyfile(generated,cache_path)
             if Path(generated)!=p: shutil.copyfile(generated,p)
-        audio_path=p
-        dur=probe(audio_path)
-        cues.append({"role":role,"text":d["text"],"audio":str(audio_path),"start":cursor,"end":cursor+dur,"duration":dur})
-        cursor+=dur+.14
+        audio_path=p; dur=probe(audio_path)
+        cues.append({"role":role,"text":d["text"],"audio":str(audio_path),"start":cursor,"end":cursor+dur,"duration":dur}); cursor+=dur+.14
     return cues
 
 def srt(cues,p):
@@ -217,34 +213,19 @@ def render(video,cues,shot,progress=None):
         ext=OUT/f"shot_{sid:03d}_extended.mp4"
         subprocess.run(["ffmpeg","-y","-i",str(video),"-vf",f"tpad=stop_mode=clone:stop_duration={target-vdur:.3f}","-t",f"{target:.3f}","-an","-c:v","libx264","-pix_fmt","yuv420p",str(ext)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT); base=ext
     final=OUT/f"shot_{sid:03d}_final.mp4"
-    # 不再使用 subtitles/libass。直接用 FFmpeg drawtext 烧录中文，避免容器内 libass 无法打开 SRT 的问题。
-    # fonts-noto-cjk 由 Dockerfile 安装，下面路径在 Debian slim 镜像中可用。
-    font_file = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-    if not Path(font_file).exists():
-        raise RuntimeError(f"中文字体不存在：{font_file}，请重新构建 Docker 镜像")
-    filters = []
-    for i, c in enumerate(cues):
-        text_file = CACHE / f"shot_{sid:03d}_subtitle_{i:02d}.txt"
-        text_file.write_text(c["text"], encoding="utf-8")
-        os.chmod(text_file, 0o644)
-        if not text_file.is_file() or text_file.stat().st_size == 0:
-            raise RuntimeError(f"字幕文本文件不存在或为空：{text_file}")
-        tf = text_file.resolve().as_posix()
-        # textfile 避免中文、标点进入 FFmpeg filter 参数时发生转义问题。
-        filters.append(
-            f"drawtext=fontfile={font_file}:textfile={tf}:"
-            f"fontcolor=white:fontsize=42:borderw=3:bordercolor=black:"
-            f"x=(w-text_w)/2:y=h-text_h-55:"
-            f"enable='between(t,{c['start']:.3f},{c['end']:.3f})'"
-        )
-    sf = ",".join(filters) if filters else "null"
-    cmd=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",sf,
-         "-map","0:v:0","-map","1:a:0","-c:v","libx264","-pix_fmt","yuv420p",
-         "-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
+    font_file="/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+    if not Path(font_file).exists(): raise RuntimeError(f"中文字体不存在：{font_file}，请重新构建 Docker 镜像")
+    filters=[]
+    for i,c in enumerate(cues):
+        text_file=CACHE/f"shot_{sid:03d}_subtitle_{i:02d}.txt"; text_file.write_text(c["text"],encoding="utf-8"); os.chmod(text_file,0o644)
+        if not text_file.is_file() or text_file.stat().st_size==0: raise RuntimeError(f"字幕文本文件不存在或为空：{text_file}")
+        tf=text_file.resolve().as_posix()
+        filters.append(f"drawtext=fontfile={font_file}:textfile={tf}:fontcolor=white:fontsize=42:borderw=3:bordercolor=black:x=(w-text_w)/2:y=h-text_h-55:enable='between(t,{c['start']:.3f},{c['end']:.3f})'")
+    sf=",".join(filters) if filters else "null"
+    cmd=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",sf,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-pix_fmt","yuv420p","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
     proc=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     if proc.returncode!=0:
-        log=OUT/f"shot_{sid:03d}_ffmpeg_error.log"
-        log.write_text(proc.stderr[-16000:],encoding="utf-8")
+        log=OUT/f"shot_{sid:03d}_ffmpeg_error.log"; log.write_text(proc.stderr[-16000:],encoding="utf-8")
         raise RuntimeError(f"FFmpeg 字幕合成失败（exit {proc.returncode}）。详细日志：{log}")
     return final
 
@@ -256,11 +237,9 @@ def build_segments(shots,segments):
     for seg in segments or []:
         picked=[int(x) for x in seg.get("shot_ids",[]) if str(x).isdigit() and int(x) in valid and int(x) not in used]
         if not picked: continue
-        used.update(picked)
-        out.append({"segment_no":len(out)+1,"title":seg.get("title",f"剧情片段 {len(out)+1:03d}"),"summary":seg.get("summary",""),"shot_ids":picked,"target_duration":sum(valid[x]["duration"] for x in picked)})
+        used.update(picked); out.append({"segment_no":len(out)+1,"title":seg.get("title",f"剧情片段 {len(out)+1:03d}"),"summary":seg.get("summary",""),"shot_ids":picked,"target_duration":sum(valid[x]["duration"] for x in picked)})
     for s in shots:
-        if s["id"] not in used:
-            out.append({"segment_no":len(out)+1,"title":f"剧情片段 {len(out)+1:03d}","summary":"","shot_ids":[s["id"]],"target_duration":s["duration"]})
+        if s["id"] not in used: out.append({"segment_no":len(out)+1,"title":f"剧情片段 {len(out)+1:03d}","summary":"","shot_ids":[s["id"]],"target_duration":s["duration"]})
     return out
 
 def concat_mp4s(files,dest,progress=None):
@@ -282,26 +261,19 @@ def concat_mp4s(files,dest,progress=None):
     return Path(dest)
 
 def render_episode(api_key,base_url,model,data,voices,settings=None,progress=None,bar=None,tts_provider="edge",gemini_api_key="",gemini_model=GEMINI_TTS_MODEL):
-    shots={s["id"]:s for s in data["shots"]}
-    segments=build_segments(data["shots"],data.get("segments",[]))
-    segment_paths=[]
-    total=len(data["shots"])
-    done=0
+    shots={s["id"]:s for s in data["shots"]}; segments=build_segments(data["shots"],data.get("segments",[])); segment_paths=[]; total=len(data["shots"]); done=0
     for seg in segments:
         paths=[]
         for sid in seg["shot_ids"]:
             shot=shots[sid]
-            def shot_progress(stage,msg): 
+            def shot_progress(stage,msg):
                 if progress: progress(stage,msg)
             final,_=generate_shot(api_key,base_url,model,shot,voices,settings or {},shot_progress,tts_provider,gemini_api_key,gemini_model)
             paths.append(final); done+=1
             if bar: bar.progress(min(done/total,1.0))
-        segpath=OUT/f"segment_{seg['segment_no']:03d}.mp4"
-        concat_mp4s(paths,segpath,progress)
-        segment_paths.append((seg["segment_no"],segpath))
-        if progress: progress("片段完成",f"剧情片段 {seg['segment_no']:03d} 完成，目标约12秒，实际 {probe(segpath):.1f}s")
-    episode=OUT/"night_agency_episode.mp4"
-    concat_mp4s([p for _,p in segment_paths],episode,progress)
+        segpath=OUT/f"segment_{seg['segment_no']:03d}.mp4"; concat_mp4s(paths,segpath,progress); segment_paths.append((seg["segment_no"],segpath))
+        if progress: progress("片段完成",f"剧情片段 {seg['segment_no']:03d} 完成，实际 {probe(segpath):.1f}s")
+    episode=OUT/"night_agency_episode.mp4"; concat_mp4s([p for _,p in segment_paths],episode,progress)
     if bar: bar.progress(1.0)
     return episode,segment_paths
 
@@ -312,9 +284,7 @@ def list_chinese_voices():
     return [v["ShortName"] for v in voices if v.get("Locale","").lower().startswith("zh-cn")]
 
 def synthesize_preview(text, voice):
-    path=AUDIO/"voice_preview.mp3"
-    asyncio.run(tts(text,voice,path,{"rate":"+0%","pitch":"+0Hz","volume":"+0%"}))
-    return str(path)
+    path=AUDIO/"voice_preview.mp3"; asyncio.run(tts(text,voice,path,{"rate":"+0%","pitch":"+0Hz","volume":"+0%"})); return str(path)
 
 def generate_character_voice_pack(voices, settings=None, progress=None):
     import zipfile, json
