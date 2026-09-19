@@ -166,16 +166,14 @@ def render(video,cues,shot,progress=None):
         ext=OUT/f"shot_{sid:03d}_extended.mp4"
         subprocess.run(["ffmpeg","-y","-i",str(video),"-vf",f"tpad=stop_mode=clone:stop_duration={target-vdur:.3f}","-t",f"{target:.3f}","-an","-c:v","libx264","-pix_fmt","yuv420p",str(ext)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT); base=ext
     final=OUT/f"shot_{sid:03d}_final.mp4"
-    # libass 在容器中对带引号/转义的绝对路径兼容性较差；直接传 POSIX 绝对路径。
-    subtitle_file=sp.resolve().as_posix()
-    if not sp.is_file():
-        raise RuntimeError(f"字幕文件不存在：{subtitle_file}")
-    try:
-        with open(sp, "r", encoding="utf-8") as _sf:
-            _sf.read(1)
-    except OSError as e:
-        raise RuntimeError(f"字幕文件不可读：{subtitle_file}：{e}")
-    sf = f"subtitles={subtitle_file}:charenc=UTF-8:force_style='FontName=Noto Sans CJK SC,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=40'"
+    # 将 SRT 复制到容器内的 ASCII 路径，避免 libass 对挂载目录/特殊路径的兼容问题。
+    subtitle_copy = CACHE / f"shot_{sid:03d}.srt"
+    shutil.copyfile(sp, subtitle_copy)
+    os.chmod(subtitle_copy, 0o644)
+    if not subtitle_copy.is_file() or subtitle_copy.stat().st_size == 0:
+        raise RuntimeError(f"字幕临时文件不存在或为空：{subtitle_copy}")
+    subtitle_file = subtitle_copy.resolve().as_posix()
+    sf = f"subtitles=filename={subtitle_file}:charenc=UTF-8:force_style='FontName=Noto Sans CJK SC,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=40'"
     cmd=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",sf,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
     proc=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     if proc.returncode!=0:
