@@ -1,35 +1,53 @@
-# Agnes Video Generator
+# Agnes Video Generator · 夜行事务所
 
-基于 Agnes Video API 的网页视频生成器，支持 Edge TTS 中文角色配音、真实 TTS 时间轴、自动 SRT 中文字幕，以及对白超出原视频时自动延长最后画面。
+一个面向中文动画连续剧制作的网页工作台：**完整剧本 → Agnes AI 自动分镜 → 约12秒剧情片段 → 中文 TTS → 中文字幕 → 片段拼接 → 完整一集**。
 
-## 功能
+## 核心工作流
 
-- 🎬 Agnes Video 2.5 Flash
-- 🎙️ Edge TTS 中文角色声音
-- 📝 网页对白编辑
-- ⏱️ 按真实 TTS 时长建立时间轴
-- 💬 自动生成中文字幕
-- 🧊 对白超过画面时自动克隆最后一帧延长
-- 🎞️ FFmpeg 自动合成 MP4
-- 💾 Agnes video_id 断点续跑
-- 🐳 Docker / docker-compose
+1. 在网页中一次性粘贴完整剧本，不需要手写“角色|台词”。
+2. Agnes 文本模型理解人物、场景、动作和对白，并自动生成镜头。
+3. 自动把镜头组织成**目标约12秒的剧情片段**。每个片段可以包含1～多个 Agnes 镜头；单个 Agnes 镜头仍限制在4～12秒。
+4. 每个镜头独立生成动画画面。
+5. Edge TTS 根据角色声音配置生成中文配音。
+6. 使用真实 TTS 时长生成 SRT，字幕只显示台词正文，不显示角色名。
+7. 如果对白超过原始画面时长，自动冻结最后一帧，保证最后一句对白也有声音和字幕。
+8. 镜头先拼成 segment_001.mp4、segment_002.mp4……，最后按剧情顺序拼成 night_agency_episode.mp4。
+
+## 12秒片段规则
+
+- 目标：每个剧情片段约 **12 秒**。
+- 实际允许一定浮动（默认8～16秒），优先保证剧情和对白完整。
+- 不为了凑12秒删除对白。
+- 用户可以在“审核12秒片段”页面调整镜头时长，保存后片段时长会重新计算。
+- 片段边界优先放在动作或对白自然结束的位置。
+
+## 断点续跑
+
+cache/tasks.json 保存 Agnes video_id。如果某个镜头生成后程序中断，再次运行会继续查询已有任务，而不是盲目重复提交。
+
+## 中文声音
+
+侧栏可以：
+- 选择 Edge TTS 中文角色声音；
+- 调整语速和音高；
+- 导入之前生成的 night-agency-voices.zip 覆盖声音配置。
 
 ## 启动
 
-1. 复制 `.env.example` 为 `.env` 并填写 `AGNES_API_KEY`。
-2. 运行 `docker compose up --build`。
-3. 浏览器打开 `http://localhost:8501`。
+1. 复制 .env.example 为 .env 并填写 AGNES_API_KEY。
+2. 运行：
 
-也可以直接安装依赖后运行 `pip install -r requirements.txt` 和 `streamlit run app.py`。
+    docker compose up --build
 
-## 时间轴规则
+3. 浏览器打开 http://localhost:8501。
 
-TTS 实际生成的音频长度决定字幕结束时间和最终音频长度。若对白超过 Agnes 原始视频时长，程序使用 FFmpeg 克隆最后画面，使视频覆盖完整对白，再烧录字幕并混入音频。
+如果已经构建过镜像，通常直接运行 docker compose up 即可。
 
 ## 项目结构
 
-- `app.py` — Web UI
-- `pipeline.py` — Agnes / TTS / 时间轴 / SRT / FFmpeg
-- `output/` — 最终视频
-- `audio/` — TTS 音频
-- `cache/tasks.json` — Agnes 任务断点信息
+- app.py — Streamlit 网页界面
+- script_parser.py — 完整剧本理解、分镜和12秒片段规划
+- pipeline.py — Agnes 视频、TTS、SRT、FFmpeg、片段/整集拼接
+- output/ — 视频、字幕、FFmpeg 日志
+- audio/ — TTS 音频
+- cache/ — 剧本、项目设置、Agnes 任务断点
