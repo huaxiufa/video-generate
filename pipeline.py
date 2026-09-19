@@ -4,6 +4,7 @@ import requests, edge_tts
 ROOT=Path(__file__).resolve().parent; OUT=ROOT/"output"; AUDIO=ROOT/"audio"; CACHE=ROOT/"cache"
 for p in (OUT,AUDIO,CACHE): p.mkdir(exist_ok=True)
 DEFAULT_VOICES={"林默":"zh-CN-YunxiNeural","苏晚":"zh-CN-XiaoxiaoNeural","顾言":"zh-CN-YunyangNeural","零":"zh-CN-YunyangNeural","韩成":"zh-CN-YunyangNeural","警员":"zh-CN-YunxiNeural","沈哲":"zh-CN-YunxiNeural","陈凯":"zh-CN-YunxiNeural","周启":"zh-CN-YunyangNeural"}
+
 def post_json(url,payload,headers,progress=None):
     for i in range(7):
         try:
@@ -18,7 +19,10 @@ def post_json(url,payload,headers,progress=None):
             if i>=6: raise
             if progress: progress("Agnes",f"网络异常，稍后重试：{e}")
             time.sleep(15*(i+1))
-def probe(p): return float(subprocess.check_output(["ffprobe","-v","error","-show_entries","format=duration","-of","default=nw=1:nk=1",str(p)],text=True).strip())
+
+def probe(p):
+    return float(subprocess.check_output(["ffprobe","-v","error","-show_entries","format=duration","-of","default=nw=1:nk=1",str(p)],text=True).strip())
+
 def generate_video(api_key,base_url,model,shot,progress=None):
     h={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"}
     payload={"model":model,"mode":"text","prompt":f"Cinematic animated mystery drama. Scene: {shot['scene']}. Visual: {shot['visual']}. Shot: {shot['shot_size']}. Camera: {shot['camera']}. No dialogue, no text, no subtitles.","seconds":str(int(shot["duration"])),"size":"720P","aspect_ratio":"16:9","n":1}
@@ -52,26 +56,24 @@ def generate_video(api_key,base_url,model,shot,progress=None):
                 for chunk in r.iter_content(1024*1024):
                     if chunk:f.write(chunk)
     return silent
+
 async def tts(text,voice,path,cfg):
     await edge_tts.Communicate(text,voice,rate=cfg.get("rate","+0%"),pitch=cfg.get("pitch","+0Hz"),volume=cfg.get("volume","+0%")).save(str(path))
+
 def normalize_dialogue(shot):
     raw=shot.get("dialogue")
     if raw is None: raw=shot.get("dialogues",[])
-    if isinstance(raw,str):
-        raw=[{"role":"林默","text":raw}]
-    elif isinstance(raw,dict):
-        raw=[raw]
+    if isinstance(raw,str): raw=[{"role":"林默","text":raw}]
+    elif isinstance(raw,dict): raw=[raw]
     result=[]
     for item in raw or []:
-        if isinstance(item,str):
-            result.append({"role":"林默","text":item})
-            continue
+        if isinstance(item,str): result.append({"role":"林默","text":item}); continue
         if not isinstance(item,dict): continue
         role=item.get("role") or item.get("speaker") or item.get("character") or item.get("name") or "林默"
         text=item.get("text") or item.get("line") or item.get("dialogue") or item.get("content") or ""
-        if isinstance(text,str) and text.strip():
-            result.append({"role":str(role), "text":text.strip()})
+        if isinstance(text,str) and text.strip(): result.append({"role":str(role),"text":text.strip()})
     return result
+
 def make_timeline(shot,voices,settings,progress=None):
     dialogues=normalize_dialogue(shot)
     if progress: progress("TTS",f"Shot {shot['id']:03d}：识别到 {len(dialogues)} 句对白")
@@ -82,6 +84,7 @@ def make_timeline(shot,voices,settings,progress=None):
         asyncio.run(tts(d["text"],voices.get(role,DEFAULT_VOICES.get(role,"zh-CN-YunxiNeural")),p,cfg))
         dur=probe(p); cues.append({"role":role,"text":d["text"],"audio":str(p),"start":cursor,"end":cursor+dur,"duration":dur}); cursor+=dur+.14
     return cues
+
 def srt(cues,p):
     def ts(x):
         ms=int(round(x*1000)); h,ms=divmod(ms,3600000); m,ms=divmod(ms,60000); s,ms=divmod(ms,1000); return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
@@ -89,6 +92,7 @@ def srt(cues,p):
         for i,c in enumerate(cues,1): f.write(f"{i}\n{ts(c['start'])} --> {ts(c['end'])}\n{c['text']}\n\n")
     if not p.exists(): raise RuntimeError(f"SRT 字幕文件无法创建：{p}")
     if cues and p.stat().st_size==0: raise RuntimeError(f"SRT 字幕文件为空：{p}")
+
 def render(video,cues,shot,progress=None):
     sid=shot["id"]; sp=OUT/f"shot_{sid:03d}.srt"; srt(cues,sp); vdur=probe(video); end=max([c["end"] for c in cues],default=0)+.25; target=max(vdur,end)
     al=OUT/f"shot_{sid:03d}_audio.txt"; audio=AUDIO/f"shot_{sid:03d}_mix.wav"
@@ -96,15 +100,15 @@ def render(video,cues,shot,progress=None):
         with open(al,"w",encoding="utf-8") as f:
             for c in cues:f.write(f"file '{Path(c['audio']).resolve()}'\n")
         subprocess.run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(al),"-c:a","pcm_s16le",str(audio)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)
-    else: subprocess.run(["ffmpeg","-y","-f","lavfi","-i","anullsrc=r=48000:cl=stereo","-t",str(max(1,vdur)),str(audio)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)
+    else:
+        subprocess.run(["ffmpeg","-y","-f","lavfi","-i","anullsrc=r=48000:cl=stereo","-t",str(max(1,vdur)),str(audio)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)
     base=video
     if target>vdur+.05:
         if progress: progress("合成",f"对白超出画面，冻结最后一帧 {target-vdur:.1f}s")
         ext=OUT/f"shot_{sid:03d}_extended.mp4"
         subprocess.run(["ffmpeg","-y","-i",str(video),"-vf",f"tpad=stop_mode=clone:stop_duration={target-vdur:.3f}","-t",f"{target:.3f}","-an","-c:v","libx264","-pix_fmt","yuv420p",str(ext)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT); base=ext
     final=OUT/f"shot_{sid:03d}_final.mp4"
-    subtitle_tmp=Path("/tmp")/f"shot_{sid:03d}.srt"
-    subtitle_tmp.write_bytes(sp.read_bytes())
+    subtitle_tmp=Path("/tmp")/f"shot_{sid:03d}.srt"; subtitle_tmp.write_bytes(sp.read_bytes())
     sf=f"subtitles=filename='{subtitle_tmp}':charenc=UTF-8:force_style='FontName=Noto Sans CJK SC,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=40'"
     cmd=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",sf,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
     proc=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
@@ -116,17 +120,75 @@ def render(video,cues,shot,progress=None):
             log.write_text(log.read_text(encoding="utf-8")+"\n\n--- FALLBACK ---\n"+proc2.stderr[-12000:],encoding="utf-8")
             raise RuntimeError(f"FFmpeg 字幕合成失败（exit {proc2.returncode}）。详细日志：{log}")
     return final
+
 def generate_shot(api_key,base_url,model,shot,voices,settings=None,progress=None):
     v=generate_video(api_key,base_url,model,shot,progress); cues=make_timeline(shot,voices,settings or {},progress); return render(v,cues,shot,progress),cues
+
+def build_segments(shots,segments):
+    valid={s["id"]:s for s in shots}; out=[]; used=set()
+    for seg in segments or []:
+        picked=[int(x) for x in seg.get("shot_ids",[]) if str(x).isdigit() and int(x) in valid and int(x) not in used]
+        if not picked: continue
+        used.update(picked)
+        out.append({"segment_no":len(out)+1,"title":seg.get("title",f"剧情片段 {len(out)+1:03d}"),"summary":seg.get("summary",""),"shot_ids":picked,"target_duration":sum(valid[x]["duration"] for x in picked)})
+    for s in shots:
+        if s["id"] not in used:
+            out.append({"segment_no":len(out)+1,"title":f"剧情片段 {len(out)+1:03d}","summary":"","shot_ids":[s["id"]],"target_duration":s["duration"]})
+    return out
+
+def concat_mp4s(files,dest,progress=None):
+    files=[Path(x) for x in files]
+    if not files: raise ValueError("没有可拼接的视频")
+    if len(files)==1:
+        if files[0]!=Path(dest): Path(dest).write_bytes(files[0].read_bytes())
+        return Path(dest)
+    listfile=CACHE/(Path(dest).stem+"_concat.txt")
+    with open(listfile,"w",encoding="utf-8") as f:
+        for p in files: f.write("file '"+str(p.resolve()).replace("'","'\\''")+"'\n")
+    cmd=["ffmpeg","-y","-f","concat","-safe","0","-i",str(listfile),"-c","copy",str(dest)]
+    proc=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+    if proc.returncode!=0:
+        if progress: progress("拼接","编码参数不一致，使用兼容模式重新拼接")
+        cmd=["ffmpeg","-y","-f","concat","-safe","0","-i",str(listfile),"-c:v","libx264","-pix_fmt","yuv420p","-c:a","aac","-b:a","192k",str(dest)]
+        proc2=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        if proc2.returncode!=0: raise RuntimeError("视频拼接失败："+proc2.stderr[-5000:])
+    return Path(dest)
+
+def render_episode(api_key,base_url,model,data,voices,settings=None,progress=None,bar=None):
+    shots={s["id"]:s for s in data["shots"]}
+    segments=build_segments(data["shots"],data.get("segments",[]))
+    segment_paths=[]
+    total=len(data["shots"])
+    done=0
+    for seg in segments:
+        paths=[]
+        for sid in seg["shot_ids"]:
+            shot=shots[sid]
+            def shot_progress(stage,msg): 
+                if progress: progress(stage,msg)
+            final,_=generate_shot(api_key,base_url,model,shot,voices,settings or {},shot_progress)
+            paths.append(final); done+=1
+            if bar: bar.progress(min(done/total,1.0))
+        segpath=OUT/f"segment_{seg['segment_no']:03d}.mp4"
+        concat_mp4s(paths,segpath,progress)
+        segment_paths.append((seg["segment_no"],segpath))
+        if progress: progress("片段完成",f"剧情片段 {seg['segment_no']:03d} 完成，目标约12秒，实际 {probe(segpath):.1f}s")
+    episode=OUT/"night_agency_episode.mp4"
+    concat_mp4s([p for _,p in segment_paths],episode,progress)
+    if bar: bar.progress(1.0)
+    return episode,segment_paths
+
 def list_chinese_voices():
     import asyncio
     async def _load(): return await edge_tts.list_voices()
     voices=asyncio.run(_load())
     return [v["ShortName"] for v in voices if v.get("Locale","").lower().startswith("zh-cn")]
+
 def synthesize_preview(text, voice):
     path=AUDIO/"voice_preview.mp3"
     asyncio.run(tts(text,voice,path,{"rate":"+0%","pitch":"+0Hz","volume":"+0%"}))
     return str(path)
+
 def generate_character_voice_pack(voices, settings=None, progress=None):
     import zipfile, json
     settings=settings or {}; pack=ROOT/"output"/"night-agency-voices"; pack.mkdir(parents=True,exist_ok=True)
