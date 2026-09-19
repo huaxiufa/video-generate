@@ -166,23 +166,35 @@ def render(video,cues,shot,progress=None):
         ext=OUT/f"shot_{sid:03d}_extended.mp4"
         subprocess.run(["ffmpeg","-y","-i",str(video),"-vf",f"tpad=stop_mode=clone:stop_duration={target-vdur:.3f}","-t",f"{target:.3f}","-an","-c:v","libx264","-pix_fmt","yuv420p",str(ext)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT); base=ext
     final=OUT/f"shot_{sid:03d}_final.mp4"
-    # 将 SRT 复制到容器内的 ASCII 路径，避免 libass 对挂载目录/特殊路径的兼容问题。
-    subtitle_copy = CACHE / f"shot_{sid:03d}.srt"
-    shutil.copyfile(sp, subtitle_copy)
-    os.chmod(subtitle_copy, 0o644)
-    if not subtitle_copy.is_file() or subtitle_copy.stat().st_size == 0:
-        raise RuntimeError(f"字幕临时文件不存在或为空：{subtitle_copy}")
-    subtitle_file = subtitle_copy.resolve().as_posix()
-    sf = f"subtitles=filename={subtitle_file}:charenc=UTF-8:force_style='FontName=Noto Sans CJK SC,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=40'"
-    cmd=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",sf,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
+    # 不再使用 subtitles/libass。直接用 FFmpeg drawtext 烧录中文，避免容器内 libass 无法打开 SRT 的问题。
+    # fonts-noto-cjk 由 Dockerfile 安装，下面路径在 Debian slim 镜像中可用。
+    font_file = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+    if not Path(font_file).exists():
+        raise RuntimeError(f"中文字体不存在：{font_file}，请重新构建 Docker 镜像")
+    filters = []
+    for i, c in enumerate(cues):
+        text_file = CACHE / f"shot_{sid:03d}_subtitle_{i:02d}.txt"
+        text_file.write_text(c["text"], encoding="utf-8")
+        os.chmod(text_file, 0o644)
+        if not text_file.is_file() or text_file.stat().st_size == 0:
+            raise RuntimeError(f"字幕文本文件不存在或为空：{text_file}")
+        tf = text_file.resolve().as_posix()
+        # textfile 避免中文、标点进入 FFmpeg filter 参数时发生转义问题。
+        filters.append(
+            f"drawtext=fontfile={font_file}:textfile={tf}:"
+            f"fontcolor=white:fontsize=42:borderw=3:bordercolor=black:"
+            f"x=(w-text_w)/2:y=h-text_h-55:"
+            f"enable='between(t,{c['start']:.3f},{c['end']:.3f})'"
+        )
+    sf = ",".join(filters) if filters else "null"
+    cmd=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",sf,
+         "-map","0:v:0","-map","1:a:0","-c:v","libx264","-pix_fmt","yuv420p",
+         "-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
     proc=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     if proc.returncode!=0:
-        log=OUT/f"shot_{sid:03d}_ffmpeg_error.log"; log.write_text(proc.stderr[-12000:],encoding="utf-8")
-        fallback=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",f"subtitles=filename='{subtitle_file}':charenc=UTF-8","-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
-        proc2=subprocess.run(fallback,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
-        if proc2.returncode!=0:
-            log.write_text(log.read_text(encoding="utf-8")+"\n\n--- FALLBACK ---\n"+proc2.stderr[-12000:],encoding="utf-8")
-            raise RuntimeError(f"FFmpeg 字幕合成失败（exit {proc2.returncode}）。详细日志：{log}")
+        log=OUT/f"shot_{sid:03d}_ffmpeg_error.log"
+        log.write_text(proc.stderr[-16000:],encoding="utf-8")
+        raise RuntimeError(f"FFmpeg 字幕合成失败（exit {proc.returncode}）。详细日志：{log}")
     return final
 
 def generate_shot(api_key,base_url,model,shot,voices,settings=None,progress=None,tts_provider="edge",gemini_api_key="",gemini_model=GEMINI_TTS_MODEL):
