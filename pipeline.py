@@ -98,3 +98,33 @@ def synthesize_preview(text, voice):
     path=AUDIO/"voice_preview.mp3"
     asyncio.run(tts(text,voice,path,{"rate":"+0%","pitch":"+0Hz","volume":"+0%"}))
     return str(path)
+
+def generate_character_voice_pack(voices, settings=None, progress=None):
+    import zipfile, json
+    settings=settings or {}
+    pack=ROOT/"output"/"night-agency-voices"
+    pack.mkdir(parents=True,exist_ok=True)
+    samples={
+        "林默":"时间不对。",
+        "苏晚":"先别猜，证据呢？",
+        "顾言":"我查到了监控记录。",
+        "零":"有些案子，结了才是真的开始。",
+        "韩成":"先别碰现场。",
+        "警员":"已经确认身份了。",
+        "沈哲":"我知道他来了。",
+        "陈凯":"我只是回来拿一样东西。",
+        "周启":"我什么都不知道。"
+    }
+    manifest={}
+    for role, voice in voices.items():
+        if progress: progress(f"生成 {role} 的声音")
+        cfg=settings.get(role,{"rate":"+0%","pitch":"+0Hz","volume":"+0%"})
+        mp3=pack/f"{role}.mp3"
+        asyncio.run(tts(samples.get(role,"这是一段角色声音试听。"),voice,mp3,cfg))
+        manifest[role]={"voice":voice,"sample_text":samples.get(role,"这是一段角色声音试听。"),"settings":cfg,"file":mp3.name}
+    (pack/"voices.json").write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding="utf-8")
+    zip_path=ROOT/"output"/"night-agency-voices.zip"
+    with zipfile.ZipFile(zip_path,"w",zipfile.ZIP_DEFLATED) as z:
+        for p in sorted(pack.iterdir()):
+            z.write(p,p.relative_to(pack))
+    return zip_path, manifest
