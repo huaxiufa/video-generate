@@ -12,27 +12,54 @@ GEMINI_TTS_MODEL="gemini-3.1-flash-tts-preview"
 def gemini_tts(text, voice, path, profile, api_key, model=GEMINI_TTS_MODEL, progress=None):
     if not api_key:
         raise RuntimeError("未配置 Gemini API Key")
-    prompt = ("Perform this Chinese dialogue as a professional animated detective drama character. "
-              f"Character voice profile: {profile}. Keep the exact wording and do not add words. "
-              "Natural pauses, restrained acting, realistic Chinese delivery. Dialogue: " + text)
-    payload = {"model": model, "input": prompt, "response_format": {"type": "audio"},
-               "generation_config": {"speech_config": [{"voice": voice}]}}
+    prompt = (
+        "Synthesize speech only. Do not return text. "
+        "Keep the exact Chinese dialogue and do not add words. "
+        f"Character voice profile: {profile}. "
+        "Natural pauses, restrained acting, realistic Chinese delivery. "
+        "Spoken transcript: " + text
+    )
+    payload = {
+        "model": model,
+        "input": prompt,
+        "response_format": {
+            "type": "audio",
+            "delivery": "inline",
+            "mime_type": "audio/l16",
+            "sample_rate": 24000
+        },
+        "generation_config": {"speech_config": [{"voice": voice}]}
+    }
     if progress:
         progress("Gemini TTS", f"生成 {voice} 语音")
-    r = requests.post("https://generativelanguage.googleapis.com/v1beta/interactions",
-                      headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-                      json=payload, timeout=180)
-    if not r.ok:
-        raise RuntimeError(f"Gemini TTS HTTP {r.status_code}: {r.text[:1500]}")
-    data = r.json().get("output_audio", {}).get("data")
-    if not data:
-        raise RuntimeError(f"Gemini TTS 未返回音频：{r.text[:1500]}")
-    import base64, wave
-    pcm = base64.b64decode(data)
-    wav_path = Path(path).with_suffix(".wav")
-    with wave.open(str(wav_path), "wb") as wf:
-        wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(24000); wf.writeframes(pcm)
-    return wav_path
+    headers={"x-goog-api-key":api_key,"Content-Type":"application/json","Api-Revision":"2026-05-20"}
+    last_error=""
+    for attempt in range(5):
+        try:
+            r=requests.post("https://generativelanguage.googleapis.com/v1beta/interactions",
+                            headers=headers,json=payload,timeout=180)
+            if r.ok:
+                data=r.json()
+                audio_b64=(data.get("output_audio") or {}).get("data")
+                if audio_b64:
+                    import base64, wave
+                    pcm=base64.b64decode(audio_b64)
+                    if pcm:
+                        wav_path=Path(path).with_suffix(".wav")
+                        with wave.open(str(wav_path),"wb") as wf:
+                            wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(24000); wf.writeframes(pcm)
+                        return wav_path
+                last_error=f"Gemini TTS 返回 completed 但没有 output_audio.data：{json.dumps(data,ensure_ascii=False)[:5000]}"
+            else:
+                last_error=f"Gemini TTS HTTP {r.status_code}: {r.text[:3000]}"
+        except Exception as e:
+            last_error=f"Gemini TTS 请求异常：{e}"
+        if attempt < 4:
+            wait=min(20,3*(2**attempt))
+            if progress:
+                progress("Gemini TTS",f"音频响应异常，第 {attempt+1}/5 次重试，{wait} 秒后重试")
+            time.sleep(wait)
+    raise RuntimeError(last_error)
 
 def post_json(url,payload,headers,progress=None):
     # Agnes 队列繁忙时采用可控退避：优先尊重 Retry-After，最长单次等待 90 秒。
