@@ -110,8 +110,14 @@ def make_timeline(shot,voices,settings,progress=None,tts_provider="edge",gemini_
     for i,d in enumerate(dialogues):
         p=AUDIO/f"shot_{shot['id']:03d}_{i:02d}.mp3"; role=d["role"]; cfg=settings.get(role,{})
         if progress: progress("TTS",f"{role} 配音 {i+1}/{len(dialogues)}")
-        asyncio.run(tts(d["text"],voices.get(role,DEFAULT_VOICES.get(role,"zh-CN-YunxiNeural")),p,cfg))
-        dur=probe(p); cues.append({"role":role,"text":d["text"],"audio":str(p),"start":cursor,"end":cursor+dur,"duration":dur}); cursor+=dur+.14
+        if tts_provider=="gemini":
+            audio_path=gemini_tts(d["text"],GEMINI_VOICES.get(role,"Kore"),p,GEMINI_VOICE_PROFILES.get(role,"realistic Chinese character voice"),gemini_api_key,gemini_model,progress)
+        else:
+            asyncio.run(tts(d["text"],voices.get(role,DEFAULT_VOICES.get(role,"zh-CN-YunxiNeural")),p,cfg))
+            audio_path=p
+        dur=probe(audio_path)
+        cues.append({"role":role,"text":d["text"],"audio":str(audio_path),"start":cursor,"end":cursor+dur,"duration":dur})
+        cursor+=dur+.14
     return cues
 
 def srt(cues,p):
