@@ -5,6 +5,35 @@ ROOT=Path(__file__).resolve().parent; OUT=ROOT/"output"; AUDIO=ROOT/"audio"; CAC
 for p in (OUT,AUDIO,CACHE): p.mkdir(exist_ok=True)
 DEFAULT_VOICES={"林默":"zh-CN-YunxiNeural","苏晚":"zh-CN-XiaoxiaoNeural","顾言":"zh-CN-YunyangNeural","零":"zh-CN-YunyangNeural","韩成":"zh-CN-YunyangNeural","警员":"zh-CN-YunxiNeural","沈哲":"zh-CN-YunxiNeural","陈凯":"zh-CN-YunxiNeural","周启":"zh-CN-YunyangNeural"}
 
+GEMINI_VOICES={"林默":"Leda","苏晚":"Iapetus","顾言":"Schedar","零":"Charon","韩成":"Gacrux","警员":"Puck","沈哲":"Orus","陈凯":"Zubenelgenubi","周启":"Alnilam"}
+GEMINI_VOICE_PROFILES={"林默":"young male, cool and clean, mid-low register, slightly breathy, restrained, observant; slow measured pace; never hot-blooded or anime-like","苏晚":"young female, clear and cool, rational and evidence-first, medium register, slightly brisk; not sweet, not sexy","顾言":"male, mid-low, dry and relaxed, technical/nerdy, concise with mild dry humor","零":"male, low-mid, calm, slow, mysterious with a slight smile; not villainous, not gangster, not CEO","韩成":"male detective, thick low-mid, slightly tired, professional and realistic; never shouting","警员":"ordinary young adult male, medium register, slightly fast and nervous; realistic, not heroic or comic","沈哲":"ordinary office worker, medium register, tired, realistic, restrained","陈凯":"ordinary colleague, medium register, slightly fast and nervous, evasive but not villainous","周启":"finance supervisor, calm, warm and polite, controlled low-mid voice, normal sounding; gradually colder under pressure, never cartoon-villain"}
+GEMINI_TTS_MODEL="gemini-3.1-flash-tts-preview"
+
+def gemini_tts(text, voice, path, profile, api_key, model=GEMINI_TTS_MODEL, progress=None):
+    if not api_key:
+        raise RuntimeError("未配置 Gemini API Key")
+    prompt = ("Perform this Chinese dialogue as a professional animated detective drama character. "
+              f"Character voice profile: {profile}. Keep the exact wording and do not add words. "
+              "Natural pauses, restrained acting, realistic Chinese delivery. Dialogue: " + text)
+    payload = {"model": model, "input": prompt, "response_format": {"type": "audio"},
+               "generation_config": {"speech_config": [{"voice": voice}]}}
+    if progress:
+        progress("Gemini TTS", f"生成 {voice} 语音")
+    r = requests.post("https://generativelanguage.googleapis.com/v1beta/interactions",
+                      headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                      json=payload, timeout=180)
+    if not r.ok:
+        raise RuntimeError(f"Gemini TTS HTTP {r.status_code}: {r.text[:1500]}")
+    data = r.json().get("output_audio", {}).get("data")
+    if not data:
+        raise RuntimeError(f"Gemini TTS 未返回音频：{r.text[:1500]}")
+    import base64, wave
+    pcm = base64.b64decode(data)
+    wav_path = Path(path).with_suffix(".wav")
+    with wave.open(str(wav_path), "wb") as wf:
+        wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(24000); wf.writeframes(pcm)
+    return wav_path
+
 def post_json(url,payload,headers,progress=None):
     for i in range(7):
         try:
@@ -74,7 +103,7 @@ def normalize_dialogue(shot):
         if isinstance(text,str) and text.strip(): result.append({"role":str(role),"text":text.strip()})
     return result
 
-def make_timeline(shot,voices,settings,progress=None):
+def make_timeline(shot,voices,settings,progress=None,tts_provider="edge",gemini_api_key="",gemini_model=GEMINI_TTS_MODEL):
     dialogues=normalize_dialogue(shot)
     if progress: progress("TTS",f"Shot {shot['id']:03d}：识别到 {len(dialogues)} 句对白")
     cues=[]; cursor=.35
@@ -121,8 +150,8 @@ def render(video,cues,shot,progress=None):
             raise RuntimeError(f"FFmpeg 字幕合成失败（exit {proc2.returncode}）。详细日志：{log}")
     return final
 
-def generate_shot(api_key,base_url,model,shot,voices,settings=None,progress=None):
-    v=generate_video(api_key,base_url,model,shot,progress); cues=make_timeline(shot,voices,settings or {},progress); return render(v,cues,shot,progress),cues
+def generate_shot(api_key,base_url,model,shot,voices,settings=None,progress=None,tts_provider="edge",gemini_api_key="",gemini_model=GEMINI_TTS_MODEL):
+    v=generate_video(api_key,base_url,model,shot,progress); cues=make_timeline(shot,voices,settings or {},progress,tts_provider,gemini_api_key,gemini_model); return render(v,cues,shot,progress),cues
 
 def build_segments(shots,segments):
     valid={s["id"]:s for s in shots}; out=[]; used=set()
@@ -154,7 +183,7 @@ def concat_mp4s(files,dest,progress=None):
         if proc2.returncode!=0: raise RuntimeError("视频拼接失败："+proc2.stderr[-5000:])
     return Path(dest)
 
-def render_episode(api_key,base_url,model,data,voices,settings=None,progress=None,bar=None):
+def render_episode(api_key,base_url,model,data,voices,settings=None,progress=None,bar=None,tts_provider="edge",gemini_api_key="",gemini_model=GEMINI_TTS_MODEL):
     shots={s["id"]:s for s in data["shots"]}
     segments=build_segments(data["shots"],data.get("segments",[]))
     segment_paths=[]
@@ -166,7 +195,7 @@ def render_episode(api_key,base_url,model,data,voices,settings=None,progress=Non
             shot=shots[sid]
             def shot_progress(stage,msg): 
                 if progress: progress(stage,msg)
-            final,_=generate_shot(api_key,base_url,model,shot,voices,settings or {},shot_progress)
+            final,_=generate_shot(api_key,base_url,model,shot,voices,settings or {},shot_progress,tts_provider,gemini_api_key,gemini_model)
             paths.append(final); done+=1
             if bar: bar.progress(min(done/total,1.0))
         segpath=OUT/f"segment_{seg['segment_no']:03d}.mp4"
