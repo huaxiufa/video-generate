@@ -1,7 +1,7 @@
 import json, zipfile, tempfile
 from pathlib import Path
 import streamlit as st
-from pipeline import DEFAULT_VOICES, generate_shot, list_chinese_voices, synthesize_preview, generate_character_voice_pack, build_segments, render_episode
+from pipeline import DEFAULT_VOICES, GEMINI_VOICES, GEMINI_VOICE_PROFILES, GEMINI_TTS_MODEL, generate_shot, list_chinese_voices, synthesize_preview, generate_character_voice_pack, build_segments, render_episode
 from script_parser import analyze_script, save_storyboard
 
 ROOT=Path(__file__).resolve().parent; DATA=ROOT/"cache"; DATA.mkdir(exist_ok=True)
@@ -23,11 +23,22 @@ with st.sidebar:
     base_url=st.text_input("API Base URL","https://apihub.agnes-ai.com/v1")
     text_model=st.text_input("剧本/分镜 AI Model","agnes-3.0-flash")
     video_model=st.text_input("动画 Video Model","agnes-video-2.5-flash")
+    st.divider(); st.header("🔊 配音引擎")
+    tts_provider=st.radio("选择配音",["Gemini TTS","Edge TTS"],index=0,key="tts_provider")
+    gemini_api_key=st.text_input("Gemini API Key",type="password",help="Google AI Studio / Gemini API Key")
+    gemini_model=st.selectbox("Gemini TTS 模型",[GEMINI_TTS_MODEL,"gemini-2.5-flash-preview-tts","gemini-2.5-pro-preview-tts"],index=0)
+    if tts_provider=="Gemini TTS":
+        st.caption("Gemini 会根据角色设定 + 当前台词控制语气、节奏和表演。")
     st.divider(); st.header("角色声音（全项目复用）")
     for role in list(project["voices"]):
         current=project["voices"].get(role,DEFAULT_VOICES.get(role,VOICE_OPTIONS[0]))
         if current not in VOICE_OPTIONS: VOICE_OPTIONS=[current]+VOICE_OPTIONS
-        project["voices"][role]=st.selectbox(role,VOICE_OPTIONS,index=VOICE_OPTIONS.index(current),key="voice_"+role)
+        if tts_provider=="Gemini TTS":
+            gopts=list(GEMINI_VOICES.values()); gcurrent=GEMINI_VOICES.get(role,"Kore")
+            st.selectbox(role+" · Gemini",gopts,index=gopts.index(gcurrent) if gcurrent in gopts else 0,key="gemini_voice_"+role,disabled=True)
+            st.caption(GEMINI_VOICE_PROFILES.get(role,""))
+        else:
+            project["voices"][role]=st.selectbox(role,VOICE_OPTIONS,index=VOICE_OPTIONS.index(current),key="voice_"+role)
         cfg=project["voice_settings"].get(role,{})
         project["voice_settings"][role]={"rate":st.text_input(role+" 语速",cfg.get("rate","+0%"),key="rate_"+role),"pitch":st.text_input(role+" 音高",cfg.get("pitch","+0Hz"),key="pitch_"+role),"volume":"+0%"}
     st.markdown("### 📦 导入角色声音包")
@@ -103,7 +114,9 @@ with t3:
                 bar=st.progress(0); status=st.empty()
                 def progress(stage,msg): status.info(f"[{stage}] {msg}")
                 try:
-                    episode, segments=render_episode(api_key,base_url,video_model,data,project["voices"],project["voice_settings"],progress,bar)
+                    if tts_provider=="Gemini TTS" and not gemini_api_key:
+                        raise RuntimeError("请选择 Gemini TTS 后填写 Gemini API Key")
+                    episode, segments=render_episode(api_key,base_url,video_model,data,project["voices"],project["voice_settings"],progress,bar,"gemini" if tts_provider=="Gemini TTS" else "edge",gemini_api_key,gemini_model)
                     for seg_no, path in segments:
                         st.markdown(f"### 片段 {seg_no:03d}")
                         st.video(str(path))
