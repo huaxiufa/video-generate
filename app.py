@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 import streamlit as st
-from pipeline import DEFAULT_VOICES, generate_shot, list_chinese_voices, synthesize_preview
+from pipeline import DEFAULT_VOICES, generate_shot, list_chinese_voices, synthesize_preview, generate_character_voice_pack
 from script_parser import analyze_script, save_storyboard
 
 ROOT=Path(__file__).resolve().parent; DATA=ROOT/"cache"; DATA.mkdir(exist_ok=True)
@@ -38,6 +38,15 @@ with st.sidebar:
             preview=synthesize_preview("这是一段声音试听。",project["voices"][role])
             st.audio(preview,format="audio/mp3")
         except Exception as e: st.error(f"试听失败：{e}")
+    if st.button("🎁 生成全部角色声音包"):
+        try:
+            with st.status("正在生成 9 个角色的声音试听包…",expanded=True) as s:
+                zip_path, manifest=generate_character_voice_pack(project["voices"],project["voice_settings"],lambda msg: s.write(msg))
+                s.update(label="声音包生成完成",state="complete")
+            with open(zip_path,"rb") as f:
+                st.download_button("⬇️ 下载 night-agency-voices.zip",f,file_name="night-agency-voices.zip",mime="application/zip")
+        except Exception as e:
+            st.error(f"声音包生成失败：{e}")
     if st.button("保存声音配置"):
         SETTINGS.write_text(json.dumps(project,ensure_ascii=False,indent=2),encoding="utf-8"); st.success("已保存")
 
