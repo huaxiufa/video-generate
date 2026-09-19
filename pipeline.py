@@ -1,4 +1,4 @@
-import json, os, subprocess, time, asyncio
+import json, os, subprocess, time, asyncio, hashlib, shutil
 from pathlib import Path
 import requests, edge_tts
 ROOT=Path(__file__).resolve().parent; OUT=ROOT/"output"; AUDIO=ROOT/"audio"; CACHE=ROOT/"cache"
@@ -107,14 +107,37 @@ def make_timeline(shot,voices,settings,progress=None,tts_provider="edge",gemini_
     dialogues=normalize_dialogue(shot)
     if progress: progress("TTS",f"Shot {shot['id']:03d}：识别到 {len(dialogues)} 句对白")
     cues=[]; cursor=.35
+    cache_dir=AUDIO/"cache"; cache_dir.mkdir(parents=True,exist_ok=True)
     for i,d in enumerate(dialogues):
-        p=AUDIO/f"shot_{shot['id']:03d}_{i:02d}.mp3"; role=d["role"]; cfg=settings.get(role,{})
+        role=d["role"]; cfg=settings.get(role,{})
         if progress: progress("TTS",f"{role} 配音 {i+1}/{len(dialogues)}")
-        if tts_provider=="gemini":
-            audio_path=gemini_tts(d["text"],GEMINI_VOICES.get(role,"Kore"),p,GEMINI_VOICE_PROFILES.get(role,"realistic Chinese character voice"),gemini_api_key,gemini_model,progress)
+        voice=GEMINI_VOICES.get(role,"Kore") if tts_provider=="gemini" else voices.get(role,DEFAULT_VOICES.get(role,"zh-CN-YunxiNeural"))
+        profile=GEMINI_VOICE_PROFILES.get(role,"realistic Chinese character voice") if tts_provider=="gemini" else ""
+        cache_payload=json.dumps({
+            "provider":tts_provider,
+            "model":gemini_model if tts_provider=="gemini" else "edge",
+            "role":role,"text":d["text"],"voice":voice,"profile":profile,
+            "settings":cfg if tts_provider!="gemini" else {}
+        },ensure_ascii=False,sort_keys=True)
+        cache_key=hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()[:24]
+        cache_path=cache_dir/f"{cache_key}.wav"
+        p=AUDIO/f"shot_{shot['id']:03d}_{i:02d}.wav"
+        if cache_path.exists():
+            if progress: progress("TTS缓存",f"命中缓存：{role}，不再调用 TTS")
+            shutil.copyfile(cache_path,p)
         else:
-            asyncio.run(tts(d["text"],voices.get(role,DEFAULT_VOICES.get(role,"zh-CN-YunxiNeural")),p,cfg))
-            audio_path=p
+            if tts_provider=="gemini":
+                generated=gemini_tts(d["text"],voice,p,profile,gemini_api_key,gemini_model,progress)
+            else:
+                edge_path=AUDIO/f"shot_{shot['id']:03d}_{i:02d}_edge.mp3"
+                asyncio.run(tts(d["text"],voice,edge_path,cfg))
+                generated=edge_path
+                subprocess.run(["ffmpeg","-y","-i",str(generated),"-ar","48000","-ac","2","-c:a","pcm_s16le",str(p)],
+                               check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)
+                generated=p
+            shutil.copyfile(generated,cache_path)
+            if Path(generated)!=p: shutil.copyfile(generated,p)
+        audio_path=p
         dur=probe(audio_path)
         cues.append({"role":role,"text":d["text"],"audio":str(audio_path),"start":cursor,"end":cursor+dur,"duration":dur})
         cursor+=dur+.14
@@ -143,13 +166,13 @@ def render(video,cues,shot,progress=None):
         ext=OUT/f"shot_{sid:03d}_extended.mp4"
         subprocess.run(["ffmpeg","-y","-i",str(video),"-vf",f"tpad=stop_mode=clone:stop_duration={target-vdur:.3f}","-t",f"{target:.3f}","-an","-c:v","libx264","-pix_fmt","yuv420p",str(ext)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT); base=ext
     final=OUT/f"shot_{sid:03d}_final.mp4"
-    subtitle_tmp=Path("/tmp")/f"shot_{sid:03d}.srt"; subtitle_tmp.write_bytes(sp.read_bytes())
-    sf=f"subtitles=filename='{subtitle_tmp}':charenc=UTF-8:force_style='FontName=Noto Sans CJK SC,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=40'"
+    subtitle_file=str(sp.resolve()).replace("\\","\\\\").replace(":","\\:")
+    sf=f"subtitles=filename='{subtitle_file}':charenc=UTF-8:force_style='FontName=Noto Sans CJK SC,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Shadow=1,Alignment=2,MarginV=40'
     cmd=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",sf,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
     proc=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     if proc.returncode!=0:
         log=OUT/f"shot_{sid:03d}_ffmpeg_error.log"; log.write_text(proc.stderr[-12000:],encoding="utf-8")
-        fallback=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",f"subtitles=filename='{subtitle_tmp}':charenc=UTF-8","-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
+        fallback=["ffmpeg","-y","-i",str(base),"-i",str(audio),"-vf",f"subtitles=filename='{subtitle_file}':charenc=UTF-8","-map","0:v:0","-map","1:a:0","-c:v","libx264","-c:a","aac","-b:a","192k","-t",f"{target:.3f}",str(final)]
         proc2=subprocess.run(fallback,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         if proc2.returncode!=0:
             log.write_text(log.read_text(encoding="utf-8")+"\n\n--- FALLBACK ---\n"+proc2.stderr[-12000:],encoding="utf-8")
