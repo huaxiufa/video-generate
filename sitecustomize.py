@@ -120,7 +120,7 @@ def _mp3(src,dst,rate=1.0):
     if p.returncode: raise RuntimeError("ffmpeg 音频转换失败: "+p.stderr[-1000:])
 def _parse(v):
     p=v.split("|")
-    return None if len(p)<3 or p[0]!="__NA_TTS__" else {"provider":p[1],"role":p[2] or "default","voice":p[3] if len(p)>3 and p[3] else _GEMINI_VOICE,"model":p[4] if len(p)>4 and p[4] else _GEMINI_MODEL,"rate":p[5] if len(p)>5 and p[5] else "1.0","force":p[6]=="1" if len(p)>6 else False}}
+    return None if len(p)<3 or p[0]!="__NA_TTS__" else {"provider":p[1],"role":p[2] or "default","voice":p[3] if len(p)>3 and p[3] else _GEMINI_VOICE,"model":p[4] if len(p)>4 and p[4] else _GEMINI_MODEL,"rate":p[5] if len(p)>5 and p[5] else "1.0","force":p[6]=="1" if len(p)>6 else False}
 def _validate(audio_voice,*a,**k):
     if isinstance(audio_voice,str) and audio_voice.startswith(_MARKER): return
     return _ORIGINAL_VALIDATE(audio_voice,*a,**k)
