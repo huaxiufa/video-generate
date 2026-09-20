@@ -31,7 +31,29 @@ s = s.replace("{{ t('taskNamePlaceholder') }}", '例如：夜行事务所 EP01�
 s = s.replace("{{ t('ideaLabel') }} (idea)", '剧本')
 s = s.replace(":placeholder=\"t('ideaPlaceholder')\"", ":placeholder=\"'在这里粘贴《夜行事务所》剧本……\\n\\n建议格式：场景 / 时间 / 人物 / 动作 / 对白。\\n系统会根据剧本生成分镜、视频、角色配音和字幕。'\"")
 s = s.replace('rows="4"', 'rows="14"')
-cf.write_text(s)
+
+# Simplify CreativeForm advanced settings: keep only aspect ratio.
+cf_text = cf.read_text()
+cf_text = cf_text.replace("resolution: '768x1152'", "resolution: '1152x768'")
+adv_start = cf_text.index("    <!-- Advanced Config -->")
+adv_end = cf_text.index("    <!-- Audio & Subtitle -->")
+simple_advanced = """    <!-- Video Format -->
+    <div class="glass-card rounded-2xl p-6 mb-4">
+      <h2 class="text-lg font-semibold text-accent mb-4">画面比例</h2>
+      <div>
+        <label class="block text-sm text-muted mb-1.5">视频画面比例</label>
+        <select v-model="form.resolution" class="w-full glass-input rounded-lg px-3 py-2.5 text-sm text-ink">
+          <option value="1152x768">横屏 16:9</option>
+          <option value="768x1152">竖屏 9:16</option>
+          <option value="1024x1024">方形 1:1</option>
+        </select>
+        <p class="text-xs text-muted mt-2">角色参考图、场景图、尾帧和视频串联方式由系统自动处理。</p>
+      </div>
+    </div>
+
+"""
+cf_text = cf_text[:adv_start] + simple_advanced + cf_text[adv_end:]
+cf.write_text(cf_text)
 
 static_index = Path('/opt/agnes-base/static/index.html')
 if static_index.exists():
