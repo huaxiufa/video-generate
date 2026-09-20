@@ -45,3 +45,50 @@ window.fetch=async function(input,init={}){
  }catch(e){}
  return origFetch.call(this,input,init);
 };
+
+
+// ── 夜行事务所：清理原作者/原站导流 UI，并把「创意」入口改成剧本编辑区 ──
+function cleanOriginalUi(){
+  const body=document.body;
+  if(!body) return;
+  // 原作者的支持项目、快速入口、官网资源、Demo/GitHub 等均不属于本项目 UI。
+  body.querySelectorAll('a[href*="lichuanyang.top"], a[href*="github.com/lcy362"]').forEach(a=>{
+    const wrap=a.closest('nav,footer,aside,.sidebar-card');
+    if(wrap) wrap.style.display='none'; else a.style.display='none';
+  });
+  body.querySelectorAll('.sidebar-card').forEach(card=>{
+    const text=(card.innerText||'').trim();
+    if(/支持项目|快速入口|给个 Star|更多创作方向|在线体验|Prompt 技巧|API 文档|模型概览/.test(text)){
+      card.style.display='none';
+    }
+  });
+  body.querySelectorAll('nav,footer').forEach(el=>{
+    const text=(el.innerText||'').trim();
+    if(/Demo|Home|Guides|FAQ|GitHub|快速入口|更多资源/.test(text)) el.style.display='none';
+  });
+  const h1=[...body.querySelectorAll('h1')].find(x=>/Agnes Video Generator/i.test(x.textContent||''));
+  if(h1) h1.textContent='夜行事务所';
+  const title=[...body.querySelectorAll('p')].find(x=>/AI 视频，一键生成/.test(x.textContent||''));
+  if(title) title.textContent='都市悬疑动画 · 剧本成片工作台';
+  document.title='夜行事务所｜动画剧本工作台';
+
+  // 主入口：保留原 Creative Pipeline，但把“创意”字段明确变成剧本输入框。
+  const labels=[...body.querySelectorAll('label')];
+  labels.forEach(label=>{
+    const txt=(label.textContent||'').trim();
+    if(/^创意$|^Idea$/i.test(txt)){
+      label.textContent='剧本';
+    }
+  });
+  const textareas=[...body.querySelectorAll('textarea')];
+  textareas.forEach(ta=>{
+    const ph=(ta.getAttribute('placeholder')||'').toLowerCase();
+    const near=(ta.parentElement?.innerText||'').toLowerCase();
+    if(/idea|创意/.test(ph+' '+near) && !/api key|提示词/.test(near)){
+      ta.setAttribute('placeholder','在这里粘贴《夜行事务所》剧本……\\n\\n建议格式：场景 / 时间 / 人物 / 动作 / 对白。\\n系统会根据剧本生成分镜、视频、角色配音和字幕。');
+      ta.style.minHeight='260px';
+    }
+  });
+}
+cleanOriginalUi();
+new MutationObserver(cleanOriginalUi).observe(document.body,{childList:true,subtree:true});
