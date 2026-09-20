@@ -11,7 +11,7 @@ const characterVoices={
 };
 const defaults={provider:'gemini_moss',model:'gemini-3.1-flash-tts-preview'};
 const saved=JSON.parse(localStorage.getItem(K)||'{}');
-const state=Object.assign({speed:1.0,roleSpeeds:{}},defaults,saved);
+const state=Object.assign({speed:1.0,roleSpeeds:{},forceGemini:{}},defaults,saved);
 const SPEEDS=[0.8,0.9,1.0,1.1,1.2];
 const roles=Object.keys(characterVoices);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -23,7 +23,7 @@ panel.innerHTML='<b>🌙 夜行事务所语音</b>'+
 '<label style="display:block;margin-top:10px">全局语速<select id=na-speed style="width:100%;margin-top:4px;padding:5px">'+SPEEDS.map(x=>'<option value="'+x+'">'+x+'×</option>').join('')+'</select></label>'+
 '<label style="display:block;margin-top:8px">当前角色语速<select id=na-role-speed style="width:100%;margin-top:4px;padding:5px">'+SPEEDS.map(x=>'<option value="'+x+'">'+x+'×</option>').join('')+'</select></label>'+
 '<div id=na-info style="margin-top:8px;line-height:1.5"></div>'+
-'<button id=na-s style="width:100%;margin-top:8px;padding:6px;border:0;border-radius:8px;background:#7c5cff;color:#fff">保存角色配置</button>'+
+'<button id=na-s style="width:100%;margin-top:8px;padding:6px;border:0;border-radius:8px;background:#7c5cff;color:#fff">保存角色配置</button><button id=na-g style="width:100%;margin-top:6px;padding:6px;border:1px solid #7c5cff;border-radius:8px;background:transparent;color:#fff">重新用 Gemini 建立该角色声音</button>'+
 '<small id=na-t style="display:block;margin-top:8px;opacity:.75">首次使用角色调用 Gemini，之后自动使用该角色的声音。</small>';
 document.body.appendChild(panel);
 const $=x=>document.getElementById(x);
@@ -33,12 +33,12 @@ function updateInfo(){
 }
 $('na-r').value=state.role||'林默';
 $('na-speed').value=String(state.speed||1.0);
-function roleSpeed(){return Number((state.roleSpeeds||{})[$('na-r').value]||state.speed||1.0)}
+function roleSpeed(){return Number((state.roleSpeeds||{})[$('na-r').value]||state.speed||1.0)} function forceGemini(){return state.forceGemini&&state.forceGemini[$('na-r').value]?'1':'0'}
 $('na-role-speed').value=String(roleSpeed());
 $('na-r').onchange=()=>{state.role=$('na-r').value;updateInfo();$('na-role-speed').value=String(roleSpeed())};
 $('na-speed').onchange=()=>{state.speed=Number($('na-speed').value);$('na-role-speed').value=String(roleSpeed())};
 $('na-role-speed').onchange=()=>{state.roleSpeeds=state.roleSpeeds||{};state.roleSpeeds[$('na-r').value]=Number($('na-role-speed').value)};
-$('na-s').onclick=()=>{localStorage.setItem(K,JSON.stringify(state));$('na-t').textContent='已保存：'+state.role+'，系统将自动使用该角色默认音色。'};
+$('na-s').onclick=()=>{localStorage.setItem(K,JSON.stringify(state));$('na-t').textContent='已保存：'+state.role+'。首次/重建用 Gemini，后续自动用声音克隆。'}; $('na-g').onclick=()=>{state.forceGemini=state.forceGemini||{};state.forceGemini[$('na-r').value]=true;localStorage.setItem(K,JSON.stringify(state));$('na-t').textContent='已标记：下一次生成该角色会重新调用 Gemini，之后恢复克隆。'};
 const origFetch=window.fetch;
 window.fetch=async function(input,init={}){
  try{
@@ -47,7 +47,7 @@ window.fetch=async function(input,init={}){
    const role=state.role||'林默', c=characterVoices[role]||characterVoices['林默'];
    if(state.provider==='gemini_moss'){
     init.body.set('audio_enabled','true');
-    init.body.set('audio_voice','__NA_TTS__|gemini_moss|'+role+'|'+c.voice+'|'+state.model+'|'+roleSpeed());
+    init.body.set('audio_voice','__NA_TTS__|gemini_moss|'+role+'|'+c.voice+'|'+state.model+'|'+roleSpeed()+'|'+forceGemini());
    }
   }
  }catch(e){}
@@ -86,6 +86,7 @@ function cleanOriginalUi(){
   if(title) title.textContent='都市悬疑动画 · 剧本成片工作台';
   document.title='夜行事务所｜动画剧本工作台';
 
+  body.querySelectorAll('.glass-card').forEach(card=>{ const text=(card.innerText||'').trim(); if(/音频配置|Audio Config|音色|voice role|speech rate/i.test(text) && /启用旁白|enable narration/i.test(text)){ card.style.display='none'; } });
   // 主入口：保留原 Creative Pipeline，但把“创意”字段明确变成剧本输入框。
   const labels=[...body.querySelectorAll('label')];
   labels.forEach(label=>{
