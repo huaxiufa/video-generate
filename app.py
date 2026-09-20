@@ -1,4 +1,4 @@
-import json, zipfile, tempfile, os
+import json, zipfile, tempfile
 from pathlib import Path
 import streamlit as st
 from pipeline import DEFAULT_VOICES, GEMINI_VOICES, GEMINI_VOICE_PROFILES, GEMINI_TTS_MODEL, AGNES_VIDEO_MODELS, GEMINI_TTS_MODELS, generate_shot, list_chinese_voices, synthesize_preview, generate_character_voice_pack, build_segments, render_episode
@@ -48,7 +48,7 @@ with st.sidebar:
     if tts_provider=="Gemini TTS":
         st.caption("每句对白由 Gemini TTS 生成；相同台词会命中缓存。")
     elif tts_provider=="Gemini首句 + MOSS-TTS-Nano续配音":
-        st.caption("每个角色第一次出现时只调用一次 Gemini，保存为声音母带；以后同一角色的新台词全部交给 CosyVoice，不再调用 Gemini。")
+        st.caption("每个角色第一次出现时只调用一次 Gemini，保存为声音母带；以后同一角色的新台词全部交给 MOSS-TTS-Nano，不再调用 Gemini。")
     st.divider(); st.header("角色声音（全项目复用）")
     for role in list(project["voices"]):
         current=project["voices"].get(role,DEFAULT_VOICES.get(role,VOICE_OPTIONS[0]))
