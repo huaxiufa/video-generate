@@ -111,12 +111,16 @@ def _moss(text,ref,out):
     if _MOSS_MODEL_DIR: cmd += ["--model-dir",_MOSS_MODEL_DIR]
     p=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=600)
     if p.returncode: raise RuntimeError("MOSS-TTS-Nano failed: "+p.stdout[-2000:])
-def _mp3(src,dst):
-    p=subprocess.run(["ffmpeg","-y","-i",str(src),"-c:a","libmp3lame","-q:a","4",str(dst)],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)
+def _atempo_filter(rate):
+    rate=max(0.5,min(float(rate or 1.0),1.5))
+    return f"atempo={rate:.4f}"
+
+def _mp3(src,dst,rate=1.0):
+    p=subprocess.run(["ffmpeg","-y","-i",str(src),"-filter:a",_atempo_filter(rate),"-c:a","libmp3lame","-q:a","4",str(dst)],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)
     if p.returncode: raise RuntimeError("ffmpeg 音频转换失败: "+p.stderr[-1000:])
 def _parse(v):
     p=v.split("|")
-    return None if len(p)<3 or p[0]!="__NA_TTS__" else {"provider":p[1],"role":p[2] or "default","voice":p[3] if len(p)>3 and p[3] else _GEMINI_VOICE,"model":p[4] if len(p)>4 and p[4] else _GEMINI_MODEL}
+    return None if len(p)<3 or p[0]!="__NA_TTS__" else {"provider":p[1],"role":p[2] or "default","voice":p[3] if len(p)>3 and p[3] else _GEMINI_VOICE,"model":p[4] if len(p)>4 and p[4] else _GEMINI_MODEL,"rate":p[5] if len(p)>5 and p[5] else "1.0"}
 def _validate(audio_voice,*a,**k):
     if isinstance(audio_voice,str) and audio_voice.startswith(_MARKER): return
     return _ORIGINAL_VALIDATE(audio_voice,*a,**k)
@@ -148,7 +152,7 @@ def install():
                         _gemini(text,cfg["model"],cfg["voice"],tmp)
                         if cfg["provider"]=="gemini_moss" and not master.exists():
                             master.parent.mkdir(parents=True,exist_ok=True); tmp.replace(master); tmp=master
-                    _mp3(tmp,Path(output_path))
+                    _mp3(tmp,Path(output_path),cfg.get("rate",1.0))
                 return output_path,None
             async def harvest(self,text,voice="zh-CN-XiaoxiaoNeural",rate="+0%"):
                 if _parse(voice): return None
