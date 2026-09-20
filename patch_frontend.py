@@ -77,22 +77,20 @@ cf_text = cf_text.replace(
 function onRefImageChange(e: Event) {"""
 )
 cf_text = cf_text.replace(
-    "      <div class="mb-4">\n        <label class="block text-sm text-muted mb-1.5">{{ t('ideaLabel') }} (idea) <span class="text-red-400">*</span></label>",
-    """      <div class="mb-4">
+    '''      <div class="mb-4">
+        <label class="block text-sm text-muted mb-1.5">{{ t('ideaLabel') }} (idea) <span class="text-red-400">*</span></label>''',
+    '''      <div class="mb-4">
         <div class="flex items-center justify-between mb-1.5">
           <label class="block text-sm text-muted">剧本 <span class="text-red-400">*</span></label>
           <label class="cursor-pointer text-xs text-accent hover:underline">
             导入 TXT / MD
             <input type="file" accept=".txt,.md,text/plain,text/markdown" class="hidden" @change="onScriptFileChange" />
           </label>
-        </div>"""
+        </div>'''
 )
-cf_text = cf_text.replace("    <div class="glass-card rounded-2xl p-6 mb-4">\n      <h2 class="text-lg font-semibold text-accent mb-4">画面比例</h2>",
-"    <div class="glass-card rounded-2xl p-6 mb-4">\n      <h2 class="text-lg font-semibold text-accent mb-4">画面比例</h2>")
-cf_text = cf_text.replace("      <h2 class="text-lg font-semibold text-accent mb-4">剧本与分镜</h2>", "      <h2 class="text-lg font-semibold text-accent mb-4">剧本与分镜</h2>")
-# Raise textarea height explicitly after earlier rows replacement.
-cf_text = cf_text.replace("rows="4"", "rows="18"")
+cf_text = cf_text.replace('rows="4"', 'rows="18"')
 cf.write_text(cf_text)
+
 
 cf.write_text(cf_text)
 
