@@ -30,22 +30,26 @@ cache/tasks.json 保存 Agnes video_id。如果某个镜头生成后程序中断
 侧栏可以：
 - 选择 Edge TTS 中文角色声音；
 - 选择 Gemini TTS；
-- 选择 **Gemini 首句 + CosyVoice 续配音**：每个角色第一次没有声音母带时调用一次 Gemini，把生成的 WAV 保存到 `audio/voices/` 并注册到 CosyVoice；之后该角色的新对白直接使用 CosyVoice，不再调用 Gemini；
+- 选择 **Gemini 首句 + MOSS-TTS-Nano 续配音**：每个角色第一次没有声音母带时调用一次 Gemini，把生成的 WAV 保存到 `audio/voices/`；之后该角色的新对白直接使用 MOSS-TTS-Nano 的 ONNX CPU 零样本音色克隆，不再调用 Gemini；
 - 调整 Edge TTS 语速和音高；
 - 导入之前生成的 night-agency-voices.zip 覆盖声音配置。
 
-### CosyVoice 声音克隆
+### MOSS-TTS-Nano 声音克隆
 
-Gemini TTS 当前使用预建声音，而不是把已有音频作为 Gemini TTS 的可复用声纹输入；因此“第一次 Gemini、以后按这段声音继续说”需要一个支持参考音频零样本克隆的本地/自托管 TTS 服务。CosyVoice 3 支持用短参考音频注册角色声音，然后后续只提交文字生成同一角色的新对白。
+本项目使用 MOSS-TTS-Nano 的 ONNX CPU 推理作为轻量级续配音引擎。官方项目目前提供约 0.1B 参数的 Nano 模型，支持中文、参考音频 voice cloning，并提供 ONNX CPU 推理路径；因此不需要像 CosyVoice 3 那样额外运行一个大型 GPU 服务。
 
-例如可使用支持 `/v1/voices/register` 和 `/v1/audio/speech` 的 CosyVoice 3 API 服务，并把地址填到 `COSYVOICE_BASE_URL`。项目默认填写 `http://localhost:8080`。
+工作方式：
 
-角色声音母带和注册信息会保存在：
+1. 某角色第一次出现：Gemini TTS 生成第一句。
+2. 自动把这句声音保存成 `audio/voices/<角色>.wav`。
+3. 后续该角色的所有新对白：使用这个 WAV 作为参考音频，交给 MOSS-TTS-Nano 生成。
+4. 相同对白仍会命中本地 TTS 缓存。
+
+角色声音母带会保存在：
 - `audio/voices/<角色>.wav`
 - `audio/voices/<角色>.txt`
-- `audio/voices/registry.json`
 
-所以重新运行项目时，只要这些文件和 CosyVoice 服务端的已注册声音仍在，就不会再次调用 Gemini 来建立该角色声音。
+MOSS-TTS-Nano 的 ONNX 模型首次运行时会自动下载并缓存。可通过 `MOSS_TTS_ONNX_MODEL_DIR` 指定本地模型目录，或通过 `HF_HOME` 控制 Hugging Face 缓存位置。
 
 ## 启动
 
