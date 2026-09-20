@@ -212,3 +212,92 @@ if static_index.exists():
     html = static_index.read_text()
     html = html.replace('night-agency-ui-v3', 'night-agency-ui-v4')
     static_index.write_text(html)
+
+# --- Night Agency Agnes 503/keyframe retry patch ---
+# The upstream lcy client retries 5xx only five times. For Agnes keyframe
+# generation we keep the selected model and wait longer for transient queue
+# saturation instead of failing the whole scene too early.
+video_api = Path('/opt/agnes-base/core/api/agnes_video.py')
+if video_api.exists():
+    vs = video_api.read_text()
+    old = """        max_rotations = len(ring) * self.max_retries
+        while attempt < self.max_retries:
+"""
+    new = """        max_rotations = len(ring) * self.max_retries
+        # Night Agency: keyframe submissions can spend longer in transient
+        # Agnes queue saturation. Keep the normal retry budget for other modes.
+        max_attempts = self.max_retries
+        if mode_desc.startswith("keyframe"):
+            try:
+                max_attempts = max(
+                    max_attempts,
+                    int(os.getenv("AGNES_VIDEO_KEYFRAME_MAX_RETRIES", "10")),
+                )
+            except (TypeError, ValueError):
+                max_attempts = max(self.max_retries, 10)
+        while attempt < max_attempts:
+"""
+    if old in vs:
+        vs = vs.replace(old, new, 1)
+
+    vs = vs.replace(
+        'logger.info(f"[AgnesVideo] Submitting {mode_desc} (attempt {attempt + 1}/{self.max_retries})...")',
+        'logger.info(f"[AgnesVideo] Submitting {mode_desc} (attempt {attempt + 1}/{max_attempts})...")',
+        1,
+    )
+
+    old_503 = """                if resp.status_code >= 500:
+                    delay = self.retry_base_delay * (attempt + 1)
+                    logger.warning(
+                        f"[AgnesVideo] {resp.status_code} server error on {mode_desc}, "
+                        f"retry {attempt + 1}/{self.max_retries} in {delay:.0f}s..."
+                    )
+"""
+    new_503 = """                if resp.status_code >= 500:
+                    try:
+                        max_503_delay = float(
+                            os.getenv("AGNES_VIDEO_503_MAX_DELAY", "180")
+                        )
+                    except (TypeError, ValueError):
+                        max_503_delay = 180.0
+                    delay = min(
+                        self.retry_base_delay * (attempt + 1),
+                        max_503_delay,
+                    )
+                    body_hint = (resp.text or "").replace("\\n", " ").replace("\\r", " ")[:300]
+                    logger.warning(
+                        f"[AgnesVideo] {resp.status_code} server error on {mode_desc}, "
+                        f"retry {attempt + 1}/{max_attempts} in {delay:.0f}s; "
+                        f"response={body_hint}"
+                    )
+"""
+    if old_503 in vs:
+        vs = vs.replace(old_503, new_503, 1)
+
+    vs = vs.replace(
+        'f"{mode_desc}: max retries ({self.max_retries}) exceeded"',
+        'f"{mode_desc}: max retries ({max_attempts}) exceeded"',
+        1,
+    )
+    vs = vs.replace(
+        'retry_count=self.max_retries,\n            extra={"mode": mode_desc},',
+        'retry_count=max_attempts,\n            extra={"mode": mode_desc},',
+        1,
+    )
+    vs = vs.replace(
+        'f"[AgnesVideo] {mode_desc}: max retries ({self.max_retries}) exceeded"',
+        'f"[AgnesVideo] {mode_desc}: max retries ({max_attempts}) exceeded"',
+        1,
+    )
+    # Make the 2.5 request explicit about a single output.
+    needle = '''            "aspect_ratio": aspect_ratio,
+        }
+'''
+    repl = '''            "aspect_ratio": aspect_ratio,
+            "n": 1,
+        }
+'''
+    if needle in vs and '"n": 1' not in vs[vs.index('async def _submit_video_v25'):vs.index('async def wait_for_video')]:
+        vs = vs.replace(needle, repl, 1)
+    video_api.write_text(vs)
+
