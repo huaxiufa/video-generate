@@ -47,7 +47,7 @@ window.fetch=async function(input,init={}){
    const role=state.role||'林默', c=characterVoices[role]||characterVoices['林默'];
    if(state.provider==='gemini_moss'){
     init.body.set('audio_enabled','true');
-    init.body.set('audio_voice','__NA_TTS__|gemini_moss|'+role+'|'+c.voice+'|'+state.model+'|'+roleSpeed()+'|'+forceGemini());
+    const fg=forceGemini(); init.body.set('audio_voice','__NA_TTS__|gemini_moss|'+role+'|'+c.voice+'|'+state.model+'|'+roleSpeed()+'|'+fg); if(fg==='1'){state.forceGemini[role]=false;localStorage.setItem(K,JSON.stringify(state));}
    }
   }
  }catch(e){}
