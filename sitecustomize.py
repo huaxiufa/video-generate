@@ -43,13 +43,17 @@ async def _na_video_payload(self, prompt, reference_image_paths, duration, width
             norm=await asyncio.to_thread(_NA_ORIGINAL_NORMALIZE,p,width,height)
             resolved.append(await self._resolve_image_ref(norm))
         if len(resolved)==1:
-            payload["mode"]="reference"
-            payload["images"]=resolved
-            mode_desc="reference (1 image)"
+            payload["mode"]="img2video"
+            payload["first_frame"]=resolved[0]
+            mode_desc="img2video (1 image)"
         elif len(resolved)>=2:
-            payload["mode"]="reference"
-            payload["images"]=resolved[:5]
-            mode_desc=f"reference ({len(resolved[:5])} images)"
+            # lcy 的 creative keyframe 流程传入的是“首帧 + 尾帧”。
+            # 对 2.5 系列应使用官方 keyframe 协议，而不是 reference：
+            # reference 更适合“参考视觉/风格”的图片集合。
+            payload["mode"]="keyframe"
+            payload["first_frame"]=resolved[0]
+            payload["last_frame"]=resolved[1]
+            mode_desc="keyframe (first+last frame)"
         else:
             mode_desc="text-to-video"
 
