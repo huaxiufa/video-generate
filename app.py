@@ -128,7 +128,8 @@ with t3:
     if not data["shots"]: st.info("请先完成剧本分析。")
     else:
         st.write(f"当前：{len(data.get('segments',[]))} 个约12秒剧情片段，{len(data['shots'])} 个镜头。")
-        st.caption(f"当前视频模型：{video_model} · 当前 TTS 模型：{gemini_model if tts_provider=="Gemini TTS" else "Edge TTS"}")
+        current_tts_model = gemini_model if tts_provider == "Gemini TTS" else ("MOSS-TTS-Nano" if tts_provider == "Gemini首句 + MOSS-TTS-Nano续配音" else "Edge TTS")
+        st.caption(f"当前视频模型：{video_model} · 当前 TTS 模型：{current_tts_model}")
         if st.button("🚀 开始生成整集",type="primary"):
             if not api_key: st.error("请填写 Agnes API Key")
             else:
