@@ -34,8 +34,9 @@ with st.sidebar:
     st.caption(AGNES_VIDEO_MODELS.get(video_model,"自定义模型；参数协议按模型名自动判断。"))
     project["video_model"]=video_model
     st.divider(); st.header("🔊 配音引擎")
-    tts_provider=st.radio("选择配音",["Gemini TTS","Edge TTS"],index=0,key="tts_provider")
+    tts_provider=st.radio("选择配音",["Gemini TTS","Gemini首句 + CosyVoice续配音","Edge TTS"],index=0,key="tts_provider")
     gemini_api_key=st.text_input("Gemini API Key",type="password",help="Google AI Studio / Gemini API Key")
+    cosyvoice_base_url=st.text_input("CosyVoice API Base URL",os.getenv("COSYVOICE_BASE_URL","http://localhost:8080"),help="用于首次 Gemini 声音母带之后的本地/自托管声音克隆；推荐使用 CosyVoice 3")
     st.markdown("### 🎙️ Gemini TTS 模型版本")
     gemini_options=list(GEMINI_TTS_MODELS.keys())+["自定义"]
     saved_gemini=project.get("gemini_tts_model",GEMINI_TTS_MODEL)
@@ -46,7 +47,9 @@ with st.sidebar:
     st.caption(GEMINI_TTS_MODELS.get(gemini_model,"自定义 Gemini TTS 模型。"))
     project["gemini_tts_model"]=gemini_model
     if tts_provider=="Gemini TTS":
-        st.caption("Gemini 会根据角色设定 + 当前台词控制语气、节奏和表演。")
+        st.caption("每句对白由 Gemini TTS 生成；相同台词会命中缓存。")
+    elif tts_provider=="Gemini首句 + CosyVoice续配音":
+        st.caption("每个角色第一次出现时只调用一次 Gemini，保存为声音母带；以后同一角色的新台词全部交给 CosyVoice，不再调用 Gemini。")
     st.divider(); st.header("角色声音（全项目复用）")
     for role in list(project["voices"]):
         current=project["voices"].get(role,DEFAULT_VOICES.get(role,VOICE_OPTIONS[0]))
@@ -133,10 +136,10 @@ with t3:
                 bar=st.progress(0); status=st.empty()
                 def progress(stage,msg): status.info(f"[{stage}] {msg}")
                 try:
-                    if tts_provider=="Gemini TTS" and not gemini_api_key:
-                        raise RuntimeError("请选择 Gemini TTS 后填写 Gemini API Key")
+                    if tts_provider in ("Gemini TTS","Gemini首句 + CosyVoice续配音") and not gemini_api_key:
+                        raise RuntimeError("选择 Gemini 配音模式后请填写 Gemini API Key")
                     SETTINGS.write_text(json.dumps(project,ensure_ascii=False,indent=2),encoding="utf-8")
-                    episode, segments=render_episode(api_key,base_url,video_model,data,project["voices"],project["voice_settings"],progress,bar,"gemini" if tts_provider=="Gemini TTS" else "edge",gemini_api_key,gemini_model)
+                    episode, segments=render_episode(api_key,base_url,video_model,data,project["voices"],project["voice_settings"],progress,bar,{"Gemini TTS":"gemini","Gemini首句 + CosyVoice续配音":"gemini_clone","Edge TTS":"edge"}[tts_provider],gemini_api_key,gemini_model,cosyvoice_base_url)
                     for seg_no, path in segments:
                         st.markdown(f"### 片段 {seg_no:03d}")
                         st.video(str(path))
