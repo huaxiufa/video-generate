@@ -9,3 +9,4 @@ services:
       - ./output:/app/output
       - ./audio:/app/audio
       - ./cache:/app/cache
+      - ./cache/moss-models:/app/models
