@@ -131,12 +131,15 @@ def generate_video(api_key,base_url,model,shot,progress=None):
     else:
         payload={"model":model,"mode":"text","prompt":prompt,"seconds":str(duration),"size":"720P","aspect_ratio":"16:9","n":1}
     tasks=CACHE/"tasks.json"; data=json.loads(tasks.read_text("utf-8")) if tasks.exists() else {}; item=data.get(str(shot["id"]),{})
-    vid=item.get("video_id"); url=item.get("video_url")
+    # 视频模型切换后不复用旧模型的 video_id / video_url，避免“选了新版本但实际仍用旧任务”。
+    same_model=(item.get("model")==model)
+    vid=item.get("video_id") if same_model else None
+    url=item.get("video_url") if same_model else None
     if not vid and not url:
         if progress: progress("Agnes",f"提交 Shot {shot['id']:03d}")
         res=post_json(base_url.rstrip("/")+"/videos",payload,h,progress); vid=res.get("video_id") or res.get("id")
         if not vid: raise RuntimeError(f"没有 video_id: {res}")
-        data[str(shot["id"])]= {"video_id":vid}; tasks.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8")
+        data[str(shot["id"])]= {"video_id":vid,"model":model}; tasks.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8")
     if not url:
         deadline=time.time()+int(os.getenv("AGNES_POLL_TIMEOUT","1800"))
         while time.time()<deadline:
@@ -150,11 +153,12 @@ def generate_video(api_key,base_url,model,shot,progress=None):
             status=st.get("status")
             if progress: progress("Agnes",f"Shot {shot['id']:03d}：{status}")
             if status=="completed":
-                url=st.get("video_url") or st.get("output_url") or st.get("url"); data[str(shot["id"])]["video_url"]=url; tasks.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8"); break
+                url=st.get("video_url") or st.get("output_url") or st.get("url"); data[str(shot["id"])]["video_url"]=url; data[str(shot["id"])]["model"]=model; tasks.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8"); break
             if status in ("failed","error","cancelled"): raise RuntimeError(f"Agnes 任务失败：{st}")
             time.sleep(10)
         if not url: raise TimeoutError(f"Shot {shot['id']} 超时，任务可从 cache/tasks.json 恢复")
-    silent=OUT/f"shot_{shot['id']:03d}_silent.mp4"
+    model_tag=hashlib.sha256(model.encode("utf-8")).hexdigest()[:10]
+    silent=OUT/f"shot_{shot['id']:03d}_{model_tag}_silent.mp4"
     if not silent.exists():
         if progress: progress("下载",f"下载 Shot {shot['id']:03d}")
         with requests.get(url,headers={} if "platform-outputs.agnes-ai.space" in url else h,stream=True,timeout=180) as r:
