@@ -241,6 +241,67 @@ def install():
             except Exception as exc:
                 _LOG.warning("[NightAgencyResume] patch failed: %s", exc)
 
+            # Creative keyframe/scene 流程使用自己的 _save_scene_task/_load_scene_task，
+            # 因此额外持久化模型，并把 video_id 写入 SceneTask，供页面展示和恢复。
+            try:
+                from core.pipelines.creative.steps_frames import VideoStepsMixin
+                if not getattr(VideoStepsMixin, "_night_agency_resume_patched", False):
+                    original_save_scene_task = VideoStepsMixin._save_scene_task
+                    original_load_scene_task = VideoStepsMixin._load_scene_task
+
+                    def _na_save_scene_task(self, scene_dir, video_id):
+                        original_save_scene_task(self, scene_dir, video_id)
+                        task_file = os.path.join(scene_dir, "task.json")
+                        try:
+                            with open(task_file, "r", encoding="utf-8") as fh:
+                                data = json.load(fh)
+                            api = getattr(self, "video_generator", None) or getattr(self, "video_api", None)
+                            model = getattr(api, "model", "") if api else ""
+                            if model:
+                                data["video_model"] = model
+                            with open(task_file, "w", encoding="utf-8") as fh:
+                                json.dump(data, fh, ensure_ascii=False, indent=2)
+
+                            state = getattr(self, "_state", None)
+                            import re as _re
+                            m = _re.search(r"scene_(\d+)$", os.path.normpath(scene_dir))
+                            if state is not None and m:
+                                idx = int(m.group(1))
+                                scenes = getattr(state, "scenes", None) or []
+                                if idx < len(scenes):
+                                    scenes[idx].video_id = str(video_id)
+                                    scenes[idx].video_status = StepStatus.RUNNING
+                                    self.task_manager.update_state(
+                                        scenes=[x.model_dump() for x in scenes]
+                                    )
+                            _NA_VIDEO_MODEL_BY_ID[str(video_id)] = model
+                        except Exception as exc:
+                            _LOG.debug("[NightAgencyResume] scene task metadata save failed: %s", exc)
+
+                    def _na_load_scene_task(self, scene_dir):
+                        task_file = os.path.join(scene_dir, "task.json")
+                        try:
+                            with open(task_file, "r", encoding="utf-8") as fh:
+                                data = json.load(fh)
+                            vid = data.get("video_id") or data.get("task_id")
+                            model = data.get("video_model")
+                            if vid and model:
+                                _NA_VIDEO_MODEL_BY_ID[str(vid)] = str(model)
+                                _LOG.info(
+                                    "[NightAgencyResume] scene %s resumes model=%s",
+                                    str(vid)[:16], model,
+                                )
+                        except Exception:
+                            pass
+                        return original_load_scene_task(self, scene_dir)
+
+                    VideoStepsMixin._save_scene_task = _na_save_scene_task
+                    VideoStepsMixin._load_scene_task = _na_load_scene_task
+                    VideoStepsMixin._night_agency_resume_patched = True
+                    _LOG.info("[NightAgencyResume] creative scene task resume patch enabled")
+            except Exception as exc:
+                _LOG.warning("[NightAgencyResume] creative scene patch failed: %s", exc)
+
             # 恢复已有 video_id 时强制使用 task.json 中保存的原模型。
             if not getattr(av.AgnesVideoAPI, "_night_agency_wait_patched", False):
                 original_wait_for_video = av.AgnesVideoAPI.wait_for_video
