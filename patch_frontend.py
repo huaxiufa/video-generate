@@ -176,6 +176,36 @@ if char_file.exists():
     )
     char_file.write_text(cs)
 
+# Make failed-task recovery explicit: this is a checkpoint resume, not a full regeneration.
+progress = root / 'components/ProgressPage.vue'
+if progress.exists():
+    ps = progress.read_text()
+    ps = ps.replace("{{ t('fbRetryHint') }}", "已有场景、参考图、尾帧和已提交的 Agnes 视频任务会保留；点击继续生成时从失败位置恢复，不会从头重做。")
+    ps = ps.replace("↻ {{ t('fbRetryBtn') }}", "↻ 继续生成（从断点恢复）")
+    ps = ps.replace(
+        '''        <!-- 任务信息（用户输入提示词 + 各项配置，v6.1） -->''',
+        '''        <!-- Night Agency checkpoint resume status -->
+        <div v-if="taskInfo && taskInfo.scenes && taskInfo.scenes.length" class="glass-card rounded-2xl p-4 mb-4">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-medium text-ink-2">场景断点</span>
+            <span class="text-xs text-muted">已生成的不重复生成</span>
+          </div>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div v-for="(scene, idx) in taskInfo.scenes" :key="idx"
+                 class="rounded-lg border border-rule/50 bg-paper-2/20 px-3 py-2">
+              <div class="text-xs text-muted">Scene {{ Number(idx) + 1 }}</div>
+              <div class="text-xs mt-1"
+                   :class="scene.video_file ? 'text-green-400' : scene.video_id ? 'text-amber-400' : 'text-muted'">
+                {{ scene.video_file ? '✓ 已完成' : scene.video_id ? '⏳ 已提交，恢复时继续轮询' : '○ 待生成' }}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 任务信息（用户输入提示词 + 各项配置，v6.1） -->'''
+    )
+    progress.write_text(ps)
+
 # Build a cache-busting marker into the generated page.
 static_index = Path('/opt/agnes-base/static/index.html')
 if static_index.exists():
