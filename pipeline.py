@@ -234,10 +234,9 @@ def make_timeline(shot,voices,settings,progress=None,tts_provider="edge",gemini_
         role=d["role"]; cfg=settings.get(role,{})
         if progress: progress("TTS",f"{role} 配音 {i+1}/{len(dialogues)}")
         is_gemini=(tts_provider=="gemini")
-        is_clone=(tts_provider=="gemini_clone")
         is_moss=(tts_provider=="gemini_moss")
-        voice=GEMINI_VOICES.get(role,"Kore") if (is_gemini or is_clone or is_moss) else voices.get(role,DEFAULT_VOICES.get(role,"zh-CN-YunxiNeural"))
-        profile=GEMINI_VOICE_PROFILES.get(role,"realistic Chinese character voice") if (is_gemini or is_clone or is_moss) else ""
+        voice=GEMINI_VOICES.get(role,"Kore") if (is_gemini or is_moss) else voices.get(role,DEFAULT_VOICES.get(role,"zh-CN-YunxiNeural"))
+        profile=GEMINI_VOICE_PROFILES.get(role,"realistic Chinese character voice") if (is_gemini or is_moss) else ""
         cache_payload=json.dumps({"provider":tts_provider,"model":gemini_model if (is_gemini or is_clone) else ("moss-tts-nano" if is_moss else "edge"),"role":role,"text":d["text"],"voice":voice,"profile":profile,"settings":cfg if not (is_gemini or is_clone or is_moss) else {}},ensure_ascii=False,sort_keys=True)
         cache_key=hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()[:24]
         cache_path=cache_dir/f"{cache_key}.wav"; p=AUDIO/f"shot_{shot['id']:03d}_{i:02d}.wav"
@@ -246,12 +245,12 @@ def make_timeline(shot,voices,settings,progress=None,tts_provider="edge",gemini_
         if cache_path.exists():
             if progress: progress("TTS缓存",f"命中缓存：{role}，不再调用 TTS")
             shutil.copyfile(cache_path,p)
-            if (is_clone or is_moss) and not ref_path.exists():
+            if is_moss and not ref_path.exists():
                 _prepare_voice_reference(p,ref_path); ref_text_path.write_text(d["text"],encoding="utf-8")
         else:
             if is_gemini:
                 generated=gemini_tts(d["text"],voice,p,profile,gemini_api_key,gemini_model,progress)
-            elif is_clone or is_moss:
+            elif is_moss:
                 if ref_path.exists():
                     generated=moss_tts(d["text"],role,ref_path,p,progress)
                 else:
