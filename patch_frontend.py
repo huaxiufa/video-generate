@@ -35,6 +35,16 @@ s = s.replace('rows="4"', 'rows="14"')
 # Simplify CreativeForm advanced settings: keep only aspect ratio.
 cf_text = cf.read_text()
 cf_text = cf_text.replace("resolution: '768x1152'", "resolution: '1152x768'")
+# Allow long episodic scripts. The backend guard is patched below to 50k.
+backend_route = Path('/opt/agnes-base/web/routes/task_creation_routes.py')
+if backend_route.exists():
+    br = backend_route.read_text()
+    br = br.replace('if len(idea) > 10000:', 'if len(idea) > 50000:')
+    br = br.replace('idea 最多 10000 字符', 'idea 最多 50000 字符')
+    backend_route.write_text(br)
+
+# Make the creative script box import .txt/.md files directly into the textarea.
+
 adv_start = cf_text.index("    <!-- Advanced Config -->")
 adv_end = cf_text.index("    <!-- Audio & Subtitle -->")
 simple_advanced = """    <!-- Video Format -->
@@ -53,6 +63,37 @@ simple_advanced = """    <!-- Video Format -->
 
 """
 cf_text = cf_text[:adv_start] + simple_advanced + cf_text[adv_end:]
+
+# Add a local script-file loader without introducing a new backend upload protocol.
+cf_text = cf_text.replace(
+    "function onRefImageChange(e: Event) {",
+    """async function onScriptFileChange(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  const text = await file.text()
+  form.idea = text
+}
+
+function onRefImageChange(e: Event) {"""
+)
+cf_text = cf_text.replace(
+    "      <div class="mb-4">\n        <label class="block text-sm text-muted mb-1.5">{{ t('ideaLabel') }} (idea) <span class="text-red-400">*</span></label>",
+    """      <div class="mb-4">
+        <div class="flex items-center justify-between mb-1.5">
+          <label class="block text-sm text-muted">剧本 <span class="text-red-400">*</span></label>
+          <label class="cursor-pointer text-xs text-accent hover:underline">
+            导入 TXT / MD
+            <input type="file" accept=".txt,.md,text/plain,text/markdown" class="hidden" @change="onScriptFileChange" />
+          </label>
+        </div>"""
+)
+cf_text = cf_text.replace("    <div class="glass-card rounded-2xl p-6 mb-4">\n      <h2 class="text-lg font-semibold text-accent mb-4">画面比例</h2>",
+"    <div class="glass-card rounded-2xl p-6 mb-4">\n      <h2 class="text-lg font-semibold text-accent mb-4">画面比例</h2>")
+cf_text = cf_text.replace("      <h2 class="text-lg font-semibold text-accent mb-4">剧本与分镜</h2>", "      <h2 class="text-lg font-semibold text-accent mb-4">剧本与分镜</h2>")
+# Raise textarea height explicitly after earlier rows replacement.
+cf_text = cf_text.replace("rows="4"", "rows="18"")
+cf.write_text(cf_text)
+
 cf.write_text(cf_text)
 
 static_index = Path('/opt/agnes-base/static/index.html')
@@ -105,6 +146,37 @@ night_audio = """  <!-- Night Agency Voice Config -->
 """
 ss = ss[:audio_start] + night_audio + ss[audio_end:]
 sub.write_text(ss)
+
+# Strengthen character consistency: generate a reusable multi-character reference sheet
+# instead of describing only the protagonist. The same sheet is then reused by all scenes.
+char_file = root / 'core/screenwriter/characters.py'
+if char_file.exists():
+    cs = char_file.read_text()
+    cs = cs.replace(
+        "Extract ONLY the main protagonist's physical appearance from this story.",
+        "Extract ALL recurring named characters from this story and describe their fixed physical appearance for a reusable character reference sheet."
+    )
+    cs = cs.replace(
+        "仅从此故事中提取主要角色的物理外貌。",
+        "从此故事中提取所有反复出现的具名角色，并为每个角色整理固定物理外貌，用于可复用的角色参考设定。"
+    )
+    cs = cs.replace(
+        "Output a CONCISE paragraph describing their fixed look — include EVERY detail:",
+        "For EACH recurring named character, output a clearly separated character block with the name and fixed look — include EVERY detail:"
+    )
+    cs = cs.replace(
+        "输出一段简洁的描述，概括其固定外观——包含所有细节：",
+        "对每个反复出现的具名角色输出独立的角色块，先写角色姓名，再写固定外观——包含所有细节："
+    )
+    cs = cs.replace(
+        "Write as a single descriptive paragraph, 3-5 sentences.",
+        "Write 2-4 sentences per character. Keep each character clearly separated."
+    )
+    cs = cs.replace(
+        "以一段描述性文字输出，3-5句话。",
+        "每个角色用2-4句话描述，并明确分隔不同角色。"
+    )
+    char_file.write_text(cs)
 
 # Build a cache-busting marker into the generated page.
 static_index = Path('/opt/agnes-base/static/index.html')
