@@ -1,1 +1,47 @@
-(()=>{const K='night_agency_tts',D={provider:'gemini_moss',model:'gemini-3.1-flash-tts-preview',voice:'Kore',role:'林默'},s=Object.assign({},D,JSON.parse(localStorage.getItem(K)||'{}')),roles=['林默','苏晚','顾言','韩成','周启','沈哲','陈凯','旁白'],voices=['Kore','Puck','Charon','Zephyr','Leda','Aoede','Fenrir','Achird','Gacrux','Sulafat'],p=document.createElement('div');p.style.cssText='position:fixed;right:18px;top:18px;z-index:99999;background:rgba(20,20,24,.96);color:#fff;padding:14px 16px;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.35);font:13px system-ui;min-width:240px';p.innerHTML='<b>🌙 夜行事务所语音</b><br><label>对白模式<select id=na-p style="width:100%"><option value=gemini_moss>首次 Gemini，后续 MOSS</option><option value=edge>原 TTS</option></select></label><label>角色<select id=na-r style="width:100%">'+roles.map(x=>'<option>'+x+'</option>').join('')+'</select></label><label>Gemini TTS<select id=na-m style="width:100%">'+['gemini-3.1-flash-tts-preview','gemini-2.5-flash-preview-tts','gemini-2.5-pro-preview-tts'].map(x=>'<option>'+x+'</option>').join('')+'</select></label><label>Gemini 音色<select id=na-v style="width:100%">'+voices.map(x=>'<option>'+x+'</option>').join('')+'</select></label><button id=na-s style="width:100%">保存</button><small id=na-t>首次使用角色调用 Gemini，之后复用角色声音。</small>';document.body.appendChild(p);const $=x=>document.getElementById(x);$('na-p').value=s.provider;$('na-r').value=s.role;$('na-m').value=s.model;$('na-v').value=s.voice;$('na-s').onclick=()=>{s.provider=$('na-p').value;s.role=$('na-r').value;s.model=$('na-m').value;s.voice=$('na-v').value;localStorage.setItem(K,JSON.stringify(s));$('na-t').textContent='已保存：'+s.role+' / '+s.provider};const f=window.fetch;window.fetch=async function(i,o={}){try{const u=typeof i==='string'?i:(i&&i.url)||'';if(/\/api\/tasks\/(creative|manuscript|anchor|poetry|simple)/.test(u)&&o.body instanceof FormData&&s.provider==='gemini_moss'){o.body.set('audio_enabled','true');o.body.set('audio_voice','__NA_TTS__|gemini_moss|'+s.role+'|'+s.voice+'|'+s.model)}}catch(e){}return f.call(this,i,o)}})();
+(()=>{const K='night_agency_tts';
+const characterVoices={
+ '林默':{gender:'male',age:18,style:'年轻男性，安静克制，观察力强，低沉但清晰，略带少年感',voice:'Puck'},
+ '苏晚':{gender:'female',age:23,style:'年轻女性，理性冷静，语气干练，成熟而有距离感',voice:'Kore'},
+ '顾言':{gender:'male',age:26,style:'年轻男性，安静理工型，声音平稳，语速偏慢，冷静专业',voice:'Charon'},
+ '韩成':{gender:'male',age:38,style:'成年男性，经验丰富，沉稳可靠，警察办案口吻，自然克制',voice:'Fenrir'},
+ '周启':{gender:'male',age:42,style:'中年男性，表面温和客气，实际紧张，语气克制而略显心虚',voice:'Gacrux'},
+ '沈哲':{gender:'male',age:34,style:'成年男性，普通职员，疲惫谨慎，声音自然，略带压力感',voice:'Achird'},
+ '陈凯':{gender:'male',age:34,style:'成年男性，普通同事，紧张心虚，说话略快但不夸张',voice:'Zephyr'},
+ '旁白':{gender:'neutral',age:30,style:'中性电影旁白，低沉、冷静、克制，带都市悬疑纪录片质感',voice:'Charon'}
+};
+const defaults={provider:'gemini_moss',model:'gemini-3.1-flash-tts-preview'};
+const saved=JSON.parse(localStorage.getItem(K)||'{}');
+const state=Object.assign({},defaults,saved);
+const roles=Object.keys(characterVoices);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const panel=document.createElement('div');
+panel.style.cssText='position:fixed;right:18px;top:18px;z-index:99999;background:rgba(20,20,24,.96);color:#fff;padding:14px 16px;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.35);font:13px system-ui;min-width:270px';
+panel.innerHTML='<b>🌙 夜行事务所语音</b>'+
+'<div style="margin-top:8px;opacity:.78">角色音色由人物设定自动匹配<br>无需手动选择声音</div>'+
+'<label style="display:block;margin-top:10px">当前角色<select id=na-r style="width:100%;margin-top:4px;padding:5px">'+roles.map(x=>'<option>'+x+'</option>').join('')+'</select></label>'+
+'<div id=na-info style="margin-top:8px;line-height:1.5"></div>'+
+'<button id=na-s style="width:100%;margin-top:8px;padding:6px;border:0;border-radius:8px;background:#7c5cff;color:#fff">保存角色配置</button>'+
+'<small id=na-t style="display:block;margin-top:8px;opacity:.75">首次使用角色调用 Gemini，之后自动使用该角色的声音。</small>';
+document.body.appendChild(panel);
+const $=x=>document.getElementById(x);
+function updateInfo(){
+ const c=characterVoices[$('na-r').value];
+ $('na-info').innerHTML='<b>'+esc($('na-r').value)+'</b><br>性别：'+c.gender+'　年龄：'+c.age+'<br>人物音色：'+esc(c.style)+'<br>Gemini 音色：'+c.voice;
+}
+$('na-r').value=state.role||'林默'; updateInfo();
+$('na-r').onchange=()=>{state.role=$('na-r').value;updateInfo()};
+$('na-s').onclick=()=>{localStorage.setItem(K,JSON.stringify(state));$('na-t').textContent='已保存：'+state.role+'，系统将自动使用该角色默认音色。'};
+const origFetch=window.fetch;
+window.fetch=async function(input,init={}){
+ try{
+  const url=typeof input==='string'?input:(input&&input.url)||'';
+  if(/\/api\/tasks\/(creative|manuscript|anchor|poetry|simple)/.test(url)&&init.body instanceof FormData){
+   const role=state.role||'林默', c=characterVoices[role]||characterVoices['林默'];
+   if(state.provider==='gemini_moss'){
+    init.body.set('audio_enabled','true');
+    init.body.set('audio_voice','__NA_TTS__|gemini_moss|'+role+'|'+c.voice+'|'+state.model);
+   }
+  }
+ }catch(e){}
+ return origFetch.call(this,input,init);
+};
