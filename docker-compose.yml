@@ -1,12 +1,15 @@
 services:
-  agnes-video-generator:
+  agnes:
     build: .
+    container_name: night-agency
     ports:
-      - "8501:8501"
+      - "8765:8765"
     env_file:
       - .env
+    environment:
+      - NA_VOICE_DIR=/app/agnes_data/voices
+      - MOSS_TTS_COMMAND=moss-tts-nano generate
+      - MOSS_TTS_CPU_THREADS=4
     volumes:
-      - ./output:/app/output
-      - ./audio:/app/audio
-      - ./cache:/app/cache
-      - ./cache/moss-models:/app/models
+      - ./agnes_data:/app/agnes_data
+    restart: unless-stopped
