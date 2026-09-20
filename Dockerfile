@@ -5,7 +5,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ffmpeg font
 RUN git clone --depth 1 https://github.com/lcy362/agnes-video-generator.git /opt/agnes-base
 COPY sitecustomize.py /app/sitecustomize.py
 COPY night-agency-ui.js /app/night-agency-ui.js
-RUN pip install --no-cache-dir --default-timeout=600 -r /opt/agnes-base/requirements.txt  && pip install --no-cache-dir --default-timeout=600 --retries 8 --no-deps git+https://github.com/OpenMOSS/MOSS-TTS-Nano.git\nCOPY patch_frontend.py /app/patch_frontend.py\nRUN python /app/patch_frontend.py \\n && cd /opt/agnes-base/frontend \\n && npm install --no-audit --no-fund \\n && npm run build \\n && cp /app/night-agency-ui.js /opt/agnes-base/static/night-agency-ui.js \\n && sed -i 's#</body>#<script src="/static/night-agency-ui.js"></script></body>#' /opt/agnes-base/static/index.html
+RUN pip install --no-cache-dir --default-timeout=600 -r /opt/agnes-base/requirements.txt  && pip install --no-cache-dir --default-timeout=600 --retries 8 --no-deps git+https://github.com/OpenMOSS/MOSS-TTS-Nano.git
+COPY patch_frontend.py /app/patch_frontend.py
+RUN python /app/patch_frontend.py \
+ && cd /opt/agnes-base/frontend \
+ && npm install --no-audit --no-fund \
+ && npm run build \
+ && cp /app/night-agency-ui.js /opt/agnes-base/static/night-agency-ui.js \
+ && sed -i 's#</body>#<script src="/static/night-agency-ui.js"></script></body>#' /opt/agnes-base/static/index.html
 ENV PYTHONPATH=/app:/opt/agnes-base
 ENV NA_VOICE_DIR=/app/agnes_data/voices
 WORKDIR /opt/agnes-base
