@@ -8,6 +8,7 @@ DEFAULT_VOICES={"林默":"zh-CN-YunxiNeural","苏晚":"zh-CN-XiaoxiaoNeural","�
 GEMINI_VOICES={"林默":"Leda","苏晚":"Iapetus","顾言":"Schedar","零":"Charon","韩成":"Gacrux","警员":"Puck","沈哲":"Orus","陈凯":"Zubenelgenubi","周启":"Alnilam"}
 GEMINI_VOICE_PROFILES={"林默":"young male, cool and clean, mid-low register, slightly breathy, restrained, observant; slow measured pace; never hot-blooded or anime-like","苏晚":"young female, clear and cool, rational and evidence-first, medium register, slightly brisk; not sweet, not sexy","顾言":"male, mid-low, dry and relaxed, technical/nerdy, concise with mild dry humor","零":"male, low-mid, calm, slow, mysterious with a slight smile; not villainous, not gangster, not CEO","韩成":"male detective, thick low-mid, slightly tired, professional and realistic; never shouting","警员":"ordinary young adult male, medium register, slightly fast and nervous; realistic, not heroic or comic","沈哲":"ordinary office worker, medium register, tired, realistic, restrained","陈凯":"ordinary colleague, medium register, slightly fast and nervous, evasive but not villainous","周启":"finance supervisor, calm, warm and polite, controlled low-mid voice, normal sounding; gradually colder under pressure, never cartoon-villain"}
 GEMINI_TTS_MODEL="gemini-3.1-flash-tts-preview"
+COSYVOICE_BASE_URL=os.getenv("COSYVOICE_BASE_URL","http://localhost:8080")
 AGNES_VIDEO_MODELS={
     "agnes-video-2.5-flash":"Agnes Video 2.5 Flash（4–12秒，720P）",
     "agnes-video-2.5":"Agnes Video 2.5（4–12秒）",
@@ -92,6 +93,52 @@ def gemini_tts(text, voice, path, profile, api_key, model=GEMINI_TTS_MODEL, prog
             if progress: progress("Gemini TTS",f"音频响应异常，第 {attempt+1}/5 次重试，{wait} 秒后重试")
             time.sleep(wait)
     raise RuntimeError(last_error)
+
+def _safe_voice_id(role):
+    import re
+    value=re.sub(r"[^a-zA-Z0-9_-]+","_",str(role)).strip("_")
+    return value or "voice"
+
+def _prepare_voice_reference(source, ref_path):
+    """把第一次 Gemini 配音保存为角色长期声音参考；不足3秒时只在末尾补静音。"""
+    ref_path=Path(ref_path); ref_path.parent.mkdir(parents=True,exist_ok=True)
+    duration=probe(source) if Path(source).exists() else 0
+    if duration >= 3.0:
+        shutil.copyfile(source,ref_path)
+    else:
+        subprocess.run(["ffmpeg","-y","-i",str(source),"-af",f"apad=pad_dur={3.0-duration:.3f}","-t","3.0","-ar","24000","-ac","1","-c:a","pcm_s16le",str(ref_path)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)
+
+def _ensure_cosyvoice_registered(base_url, role, ref_path, ref_text, progress=None):
+    """首次使用角色时向 CosyVoice 注册参考声音；注册成功后以后只传文字。"""
+    voice_id=_safe_voice_id(role); registry=AUDIO/"voices"/"registry.json"; registry.parent.mkdir(parents=True,exist_ok=True)
+    try: data=json.loads(registry.read_text("utf-8")) if registry.exists() else {}
+    except Exception: data={}
+    if data.get(role,{}).get("voice_id")==voice_id: return voice_id
+    url=base_url.rstrip("/")+"/v1/voices/register"
+    if progress: progress("声音克隆",f"注册 {role} 的长期声音模型")
+    try:
+        with open(ref_path,"rb") as f:
+            r=requests.post(url,data={"voice_id":voice_id,"prompt_text":ref_text},files={"prompt_wav":(ref_path.name,f,"audio/wav")},timeout=180)
+        if r.status_code not in (200,201,204,409):
+            raise RuntimeError(f"CosyVoice 注册失败 HTTP {r.status_code}: {r.text[:2000]}")
+        data[role]={"voice_id":voice_id,"reference":str(ref_path),"reference_text":ref_text}
+        registry.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8")
+        return voice_id
+    except requests.RequestException as e:
+        raise RuntimeError(f"CosyVoice 注册请求失败：{e}") from e
+
+def cosyvoice_tts(text, role, ref_path, ref_text, path, base_url=COSYVOICE_BASE_URL, progress=None):
+    """使用已注册的角色声音生成新对白，不再调用 Gemini。"""
+    voice_id=_ensure_cosyvoice_registered(base_url,role,ref_path,ref_text,progress)
+    if progress: progress("CosyVoice",f"{role} 生成新对白")
+    try:
+        r=requests.post(base_url.rstrip("/")+"/v1/audio/speech",json={"input":text,"voice":voice_id},timeout=300)
+        if not r.ok: raise RuntimeError(f"CosyVoice HTTP {r.status_code}: {r.text[:3000]}")
+        Path(path).write_bytes(r.content)
+        if Path(path).stat().st_size<=44: raise RuntimeError("CosyVoice 返回的 WAV 为空或无效")
+        return Path(path)
+    except requests.RequestException as e:
+        raise RuntimeError(f"CosyVoice 请求失败：{e}") from e
 
 def post_json(url,payload,headers,progress=None):
     max_attempts=7
@@ -185,7 +232,7 @@ def normalize_dialogue(shot):
         if isinstance(text,str) and text.strip(): result.append({"role":str(role),"text":text.strip()})
     return result
 
-def make_timeline(shot,voices,settings,progress=None,tts_provider="edge",gemini_api_key="",gemini_model=GEMINI_TTS_MODEL):
+def make_timeline(shot,voices,settings,progress=None,tts_provider="edge",gemini_api_key="",gemini_model=GEMINI_TTS_MODEL,cosyvoice_base_url=COSYVOICE_BASE_URL):
     dialogues=normalize_dialogue(shot)
     if progress: progress("TTS",f"Shot {shot['id']:03d}：识别到 {len(dialogues)} 句对白")
     cues=[]; cursor=.35
@@ -193,17 +240,29 @@ def make_timeline(shot,voices,settings,progress=None,tts_provider="edge",gemini_
     for i,d in enumerate(dialogues):
         role=d["role"]; cfg=settings.get(role,{})
         if progress: progress("TTS",f"{role} 配音 {i+1}/{len(dialogues)}")
-        voice=GEMINI_VOICES.get(role,"Kore") if tts_provider=="gemini" else voices.get(role,DEFAULT_VOICES.get(role,"zh-CN-YunxiNeural"))
-        profile=GEMINI_VOICE_PROFILES.get(role,"realistic Chinese character voice") if tts_provider=="gemini" else ""
-        cache_payload=json.dumps({"provider":tts_provider,"model":gemini_model if tts_provider=="gemini" else "edge","role":role,"text":d["text"],"voice":voice,"profile":profile,"settings":cfg if tts_provider!="gemini" else {}},ensure_ascii=False,sort_keys=True)
+        is_gemini=(tts_provider=="gemini")
+        is_clone=(tts_provider=="gemini_clone")
+        voice=GEMINI_VOICES.get(role,"Kore") if (is_gemini or is_clone) else voices.get(role,DEFAULT_VOICES.get(role,"zh-CN-YunxiNeural"))
+        profile=GEMINI_VOICE_PROFILES.get(role,"realistic Chinese character voice") if (is_gemini or is_clone) else ""
+        cache_payload=json.dumps({"provider":tts_provider,"model":gemini_model if (is_gemini or is_clone) else "edge","role":role,"text":d["text"],"voice":voice,"profile":profile,"settings":cfg if not (is_gemini or is_clone) else {}},ensure_ascii=False,sort_keys=True)
         cache_key=hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()[:24]
         cache_path=cache_dir/f"{cache_key}.wav"; p=AUDIO/f"shot_{shot['id']:03d}_{i:02d}.wav"
+        voice_dir=AUDIO/"voices"; voice_dir.mkdir(parents=True,exist_ok=True)
+        ref_path=voice_dir/f"{_safe_voice_id(role)}.wav"; ref_text_path=voice_dir/f"{_safe_voice_id(role)}.txt"
         if cache_path.exists():
             if progress: progress("TTS缓存",f"命中缓存：{role}，不再调用 TTS")
             shutil.copyfile(cache_path,p)
+            if is_clone and not ref_path.exists():
+                _prepare_voice_reference(p,ref_path); ref_text_path.write_text(d["text"],encoding="utf-8")
         else:
-            if tts_provider=="gemini":
+            if is_gemini:
                 generated=gemini_tts(d["text"],voice,p,profile,gemini_api_key,gemini_model,progress)
+            elif is_clone and ref_path.exists() and ref_text_path.exists():
+                generated=cosyvoice_tts(d["text"],role,ref_path,ref_text_path.read_text("utf-8"),p,cosyvoice_base_url,progress)
+            elif is_clone:
+                generated=gemini_tts(d["text"],voice,p,profile,gemini_api_key,gemini_model,progress)
+                _prepare_voice_reference(generated,ref_path); ref_text_path.write_text(d["text"],encoding="utf-8")
+                _ensure_cosyvoice_registered(cosyvoice_base_url,role,ref_path,d["text"],progress)
             else:
                 edge_path=AUDIO/f"shot_{shot['id']:03d}_{i:02d}_edge.mp3"; asyncio.run(tts(d["text"],voice,edge_path,cfg))
                 generated=edge_path
@@ -253,8 +312,8 @@ def render(video,cues,shot,progress=None):
         raise RuntimeError(f"FFmpeg 字幕合成失败（exit {proc.returncode}）。详细日志：{log}")
     return final
 
-def generate_shot(api_key,base_url,model,shot,voices,settings=None,progress=None,tts_provider="edge",gemini_api_key="",gemini_model=GEMINI_TTS_MODEL):
-    v=generate_video(api_key,base_url,model,shot,progress); cues=make_timeline(shot,voices,settings or {},progress,tts_provider,gemini_api_key,gemini_model); return render(v,cues,shot,progress),cues
+def generate_shot(api_key,base_url,model,shot,voices,settings=None,progress=None,tts_provider="edge",gemini_api_key="",gemini_model=GEMINI_TTS_MODEL,cosyvoice_base_url=COSYVOICE_BASE_URL):
+    v=generate_video(api_key,base_url,model,shot,progress); cues=make_timeline(shot,voices,settings or {},progress,tts_provider,gemini_api_key,gemini_model,cosyvoice_base_url); return render(v,cues,shot,progress),cues
 
 def build_segments(shots,segments):
     valid={s["id"]:s for s in shots}; out=[]; used=set()
@@ -284,7 +343,7 @@ def concat_mp4s(files,dest,progress=None):
         if proc2.returncode!=0: raise RuntimeError("视频拼接失败："+proc2.stderr[-5000:])
     return Path(dest)
 
-def render_episode(api_key,base_url,model,data,voices,settings=None,progress=None,bar=None,tts_provider="edge",gemini_api_key="",gemini_model=GEMINI_TTS_MODEL):
+def render_episode(api_key,base_url,model,data,voices,settings=None,progress=None,bar=None,tts_provider="edge",gemini_api_key="",gemini_model=GEMINI_TTS_MODEL,cosyvoice_base_url=COSYVOICE_BASE_URL):
     shots={s["id"]:s for s in data["shots"]}; segments=build_segments(data["shots"],data.get("segments",[])); segment_paths=[]; total=len(data["shots"]); done=0
     for seg in segments:
         paths=[]
@@ -292,7 +351,7 @@ def render_episode(api_key,base_url,model,data,voices,settings=None,progress=Non
             shot=shots[sid]
             def shot_progress(stage,msg):
                 if progress: progress(stage,msg)
-            final,_=generate_shot(api_key,base_url,model,shot,voices,settings or {},shot_progress,tts_provider,gemini_api_key,gemini_model)
+            final,_=generate_shot(api_key,base_url,model,shot,voices,settings or {},shot_progress,tts_provider,gemini_api_key,gemini_model,cosyvoice_base_url)
             paths.append(final); done+=1
             if bar: bar.progress(min(done/total,1.0))
         segpath=OUT/f"segment_{seg['segment_no']:03d}.mp4"; concat_mp4s(paths,segpath,progress); segment_paths.append((seg["segment_no"],segpath))
