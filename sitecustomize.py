@@ -1,7 +1,8 @@
 """Night Agency extensions loaded automatically via sitecustomize.py."""
-import asyncio, base64, os, subprocess, tempfile, wave
+import asyncio, base64, os, subprocess, tempfile, wave, logging
 from pathlib import Path
 import requests
+
 _MARKER="__NA_TTS__|"
 _VOICES=Path(os.getenv("NA_VOICE_DIR","/app/agnes_data/voices"))
 _GEMINI_KEY=os.getenv("GEMINI_API_KEY","").strip()
@@ -10,7 +11,91 @@ _GEMINI_VOICE=os.getenv("GEMINI_TTS_VOICE","Kore")
 _MOSS_COMMAND=os.getenv("MOSS_TTS_COMMAND","moss-tts-nano generate")
 _MOSS_MODEL_DIR=os.getenv("MOSS_TTS_ONNX_MODEL_DIR","").strip()
 _MOSS_THREADS=os.getenv("MOSS_TTS_CPU_THREADS","4")
-def _safe(v): return "".join(c if c.isalnum() or c in "-_." else "_" for c in v.strip())[:80] or "default"
+_LOG=logging.getLogger("NightAgency")
+
+# 夜行事务所自己的 Agnes 视频调用层。
+# 只接管 submit_video；后面的官方轮询/下载/合成流程继续复用 lcy 基础项目，
+# 因而不会破坏它现有的任务、断点续传、Key 轮换和进度系统。
+def _na_video_payload(self, prompt, reference_image_paths, duration, width, height, seed, negative_prompt, **kwargs):
+    model=self.model
+    duration=int(duration or 5)
+    refs=reference_image_paths or []
+
+    if model in ("agnes-video-2.5-flash","agnes-video-2.5"):
+        seconds=str(max(4,min(duration,12)))
+        size=kwargs.get("video_size") or "720P"
+        if model=="agnes-video-2.5-flash":
+            size="720P"
+        aspect=self._width_height_to_aspect_ratio(width,height)
+        payload={
+            "model":model,
+            "mode":"text",
+            "prompt":prompt,
+            "seconds":seconds,
+            "size":size,
+            "aspect_ratio":aspect,
+        }
+        if seed is not None:
+            payload["seed"]=seed
+
+        resolved=[]
+        for p in refs:
+            norm=await asyncio.to_thread(_NA_ORIGINAL_NORMALIZE,p,width,height)
+            resolved.append(await self._resolve_image_ref(norm))
+        if len(resolved)==1:
+            payload["mode"]="reference"
+            payload["images"]=resolved
+            mode_desc="reference (1 image)"
+        elif len(resolved)>=2:
+            payload["mode"]="reference"
+            payload["images"]=resolved[:5]
+            mode_desc=f"reference ({len(resolved[:5])} images)"
+        else:
+            mode_desc="text-to-video"
+
+    elif model=="agnes-video-v2.0":
+        num_frames,frame_rate=self._get_frame_config(duration,width,height)
+        payload={
+            "model":model,
+            "prompt":prompt,
+            "width":width,
+            "height":height,
+            "num_frames":num_frames,
+            "frame_rate":frame_rate,
+        }
+        if seed is not None:
+            payload["seed"]=seed
+        if negative_prompt:
+            payload["negative_prompt"]=negative_prompt
+
+        resolved=[]
+        for p in refs:
+            norm=await asyncio.to_thread(_NA_ORIGINAL_NORMALIZE,p,width,height)
+            resolved.append(await self._resolve_image_ref(norm))
+        if len(resolved)==1:
+            payload["image"]=resolved[0]
+            payload["mode"]="ti2vid"
+            mode_desc="image-to-video"
+        elif len(resolved)>=2:
+            payload["extra_body"]={"image":resolved,"mode":"keyframes"}
+            mode_desc=f"keyframes ({len(resolved)} frames)"
+        else:
+            mode_desc="text-to-video"
+    else:
+        # 自定义新模型：默认按 2.5 文生视频协议发出，方便后续测试新版本。
+        payload={
+            "model":model,
+            "mode":"text",
+            "prompt":prompt,
+            "seconds":str(max(4,min(duration,12))),
+            "size":"720P",
+            "aspect_ratio":self._width_height_to_aspect_ratio(width,height),
+        }
+        mode_desc="custom-2.5-compatible"
+
+    return payload,mode_desc
+
+def _safe(v): return "".join(c for c in str(v) if c.isalnum() or c in "-_.")[:80] or "default"
 def _master(role):
     _VOICES.mkdir(parents=True,exist_ok=True); return _VOICES/f"{_safe(role)}.wav"
 def _pcm_wav(path,pcm):
@@ -36,32 +121,61 @@ def _validate(audio_voice,*a,**k):
     if isinstance(audio_voice,str) and audio_voice.startswith(_MARKER): return
     return _ORIGINAL_VALIDATE(audio_voice,*a,**k)
 _ORIGINAL_VALIDATE=lambda *a,**k: None
+_NA_VIDEO_PATCHED=False
+_NA_ORIGINAL_NORMALIZE=None
+
 def install():
+    global _NA_VIDEO_PATCHED,_NA_ORIGINAL_NORMALIZE
     try:
         import core.audio.tts as tts
-        if getattr(tts.EdgeTTSEngine,"_na_patched",False): return
-        original_generate,original_harvest=tts.EdgeTTSEngine.generate,tts.EdgeTTSEngine.harvest_cues
         try:
             import web.helpers as helpers
             globals()["_ORIGINAL_VALIDATE"]=helpers._validate_voice_compat
             helpers._validate_voice_compat=_validate
         except Exception: pass
-        async def generate(self,text,output_path,voice="zh-CN-XiaoxiaoNeural",rate="+0%"):
-            cfg=_parse(voice)
-            if not cfg: return await original_generate(self,text,output_path,voice,rate)
-            role,master=cfg["role"],_master(cfg["role"])
-            with tempfile.TemporaryDirectory(prefix="na-tts-") as td:
-                tmp=Path(td)/"speech.wav"
-                if cfg["provider"]=="gemini_moss" and master.exists(): _moss(text,master,tmp)
-                else:
-                    _gemini(text,cfg["model"],cfg["voice"],tmp)
-                    if cfg["provider"]=="gemini_moss" and not master.exists(): master.parent.mkdir(parents=True,exist_ok=True); tmp.replace(master); tmp=master
-                _mp3(tmp,Path(output_path))
-            return output_path,None
-        async def harvest(self,text,voice="zh-CN-XiaoxiaoNeural",rate="+0%"):
-            if _parse(voice): return None
-            return await original_harvest(self,text,voice,rate)
-        tts.EdgeTTSEngine.generate,tts.EdgeTTSEngine.harvest_cues=generate,harvest
-        tts.EdgeTTSEngine._na_patched=True
-    except Exception as e: print("[NightAgency] install failed:",e)
+
+        # TTS：首次 Gemini，之后 MOSS。
+        if not getattr(tts.EdgeTTSEngine,"_na_patched",False):
+            original_generate,original_harvest=tts.EdgeTTSEngine.generate,tts.EdgeTTSEngine.harvest_cues
+            async def generate(self,text,output_path,voice="zh-CN-XiaoxiaoNeural",rate="+0%"):
+                cfg=_parse(voice)
+                if not cfg: return await original_generate(self,text,output_path,voice,rate)
+                role,master=cfg["role"],_master(cfg["role"])
+                with tempfile.TemporaryDirectory(prefix="na-tts-") as td:
+                    tmp=Path(td)/"speech.wav"
+                    if cfg["provider"]=="gemini_moss" and master.exists(): _moss(text,master,tmp)
+                    else:
+                        _gemini(text,cfg["model"],cfg["voice"],tmp)
+                        if cfg["provider"]=="gemini_moss" and not master.exists():
+                            master.parent.mkdir(parents=True,exist_ok=True); tmp.replace(master); tmp=master
+                    _mp3(tmp,Path(output_path))
+                return output_path,None
+            async def harvest(self,text,voice="zh-CN-XiaoxiaoNeural",rate="+0%"):
+                if _parse(voice): return None
+                return await original_harvest(self,text,voice,rate)
+            tts.EdgeTTSEngine.generate,tts.EdgeTTSEngine.harvest_cues=generate,harvest
+            tts.EdgeTTSEngine._na_patched=True
+
+        # 视频：完全走夜行事务所自己的 model -> payload 分流。
+        if not _NA_VIDEO_PATCHED:
+            from core.api import agnes_video as av
+            _NA_ORIGINAL_NORMALIZE=av.normalize_reference_path
+            original_submit=av.AgnesVideoAPI.submit_video
+
+            async def submit_video(self,prompt,reference_image_paths=[],duration=None,width=1152,height=768,seed=None,negative_prompt=None,**kwargs):
+                payload,mode_desc=await _na_video_payload(
+                    self,prompt,reference_image_paths,duration,width,height,seed,negative_prompt,**kwargs
+                )
+                _LOG.info("[NightAgencyVideo] model=%s mode=%s payload=%s",self.model,mode_desc,{k:v for k,v in payload.items() if k not in ("images","image")})
+                return await self._submit_with_retry(payload,mode_desc)
+
+            # 保存原方法供调试/回滚；真正运行时不再调用原 submit_video。
+            av.AgnesVideoAPI._night_agency_original_submit=original_submit
+            av.AgnesVideoAPI.submit_video=submit_video
+            av.AgnesVideoAPI._night_agency_video_patched=True
+            _NA_VIDEO_PATCHED=True
+            _LOG.info("[NightAgencyVideo] 独立 Agnes 视频调用层已启用")
+    except Exception as e:
+        print("[NightAgency] install failed:",e)
+
 install()
