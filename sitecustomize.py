@@ -1,5 +1,5 @@
 """Night Agency extensions loaded automatically via sitecustomize.py."""
-import asyncio, base64, os, subprocess, tempfile, wave, logging
+import asyncio, base64, json, os, subprocess, tempfile, wave, logging
 from pathlib import Path
 import requests
 
@@ -131,6 +131,7 @@ def _validate(audio_voice,*a,**k):
 _ORIGINAL_VALIDATE=lambda *a,**k: None
 _NA_VIDEO_PATCHED=False
 _NA_ORIGINAL_NORMALIZE=None
+_NA_VIDEO_MODEL_BY_ID={}
 
 def install():
     global _NA_VIDEO_PATCHED,_NA_ORIGINAL_NORMALIZE
@@ -180,6 +181,84 @@ def install():
             # 保存原方法供调试/回滚；真正运行时不再调用原 submit_video。
             av.AgnesVideoAPI._night_agency_original_submit=original_submit
             av.AgnesVideoAPI.submit_video=submit_video
+
+            # 断点续传增强：保存每个 scene 实际使用的视频模型，
+            # 恢复时优先轮询原 video_id 对应的模型，避免修复后切换模型导致错轮询。
+            try:
+                from core.pipelines import BasePipeline
+                from models.task import StepStatus
+
+                if not getattr(BasePipeline, "_night_agency_resume_patched", False):
+                    original_save_task_json = BasePipeline._save_task_json
+                    original_load_task_json = BasePipeline._load_task_json
+
+                    def _na_save_task_json(self, sub_dir, data):
+                        payload = dict(data or {})
+                        api = getattr(self, "video_generator", None) or getattr(self, "video_api", None)
+                        if api is not None and getattr(api, "model", None):
+                            payload.setdefault("video_model", api.model)
+                        original_save_task_json(self, sub_dir, payload)
+
+                        vid = payload.get("video_id") or payload.get("task_id")
+                        scene_name = os.path.basename(os.path.normpath(sub_dir))
+                        import re as _re
+                        m = _re.match(r"scene_(\\d+)$", scene_name)
+                        state = getattr(self, "_state", None)
+                        if m and state is not None and vid:
+                            idx = int(m.group(1))
+                            scenes = getattr(state, "scenes", None) or []
+                            if idx < len(scenes):
+                                try:
+                                    scenes[idx].video_id = str(vid)
+                                    scenes[idx].video_status = StepStatus.RUNNING
+                                    self.task_manager.update_state(
+                                        scenes=[x.model_dump() for x in scenes]
+                                    )
+                                except Exception as exc:
+                                    _LOG.debug("[NightAgencyResume] scene state save failed: %s", exc)
+
+                    def _na_load_task_json(self, sub_dir):
+                        task_file = os.path.join(sub_dir, "task.json")
+                        try:
+                            with open(task_file, "r", encoding="utf-8") as fh:
+                                data = json.load(fh)
+                            vid = data.get("video_id") or data.get("task_id")
+                            model = data.get("video_model")
+                            if vid and model:
+                                _NA_VIDEO_MODEL_BY_ID[str(vid)] = str(model)
+                                _LOG.info(
+                                    "[NightAgencyResume] scene task %s uses model=%s",
+                                    str(vid)[:16], model,
+                                )
+                        except Exception:
+                            pass
+                        return original_load_task_json(self, sub_dir)
+
+                    BasePipeline._save_task_json = _na_save_task_json
+                    BasePipeline._load_task_json = _na_load_task_json
+                    BasePipeline._night_agency_resume_patched = True
+                    _LOG.info("[NightAgencyResume] task.json 模型记忆 + 场景状态持久化已启用")
+            except Exception as exc:
+                _LOG.warning("[NightAgencyResume] patch failed: %s", exc)
+
+            # 恢复已有 video_id 时强制使用 task.json 中保存的原模型。
+            if not getattr(av.AgnesVideoAPI, "_night_agency_wait_patched", False):
+                original_wait_for_video = av.AgnesVideoAPI.wait_for_video
+
+                async def _na_wait_for_video(self, video_id, *args, **kwargs):
+                    model = _NA_VIDEO_MODEL_BY_ID.get(str(video_id))
+                    if model and model != getattr(self, "model", None):
+                        old_model = self.model
+                        self.model = model
+                        try:
+                            return await original_wait_for_video(self, video_id, *args, **kwargs)
+                        finally:
+                            self.model = old_model
+                    return await original_wait_for_video(self, video_id, *args, **kwargs)
+
+                av.AgnesVideoAPI.wait_for_video = _na_wait_for_video
+                av.AgnesVideoAPI._night_agency_wait_patched = True
+
             av.AgnesVideoAPI._night_agency_video_patched=True
             _NA_VIDEO_PATCHED=True
             _LOG.info("[NightAgencyVideo] 独立 Agnes 视频调用层已启用")
