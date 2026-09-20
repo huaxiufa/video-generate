@@ -1,7 +1,7 @@
 import json, zipfile, tempfile
 from pathlib import Path
 import streamlit as st
-from pipeline import DEFAULT_VOICES, GEMINI_VOICES, GEMINI_VOICE_PROFILES, GEMINI_TTS_MODEL, generate_shot, list_chinese_voices, synthesize_preview, generate_character_voice_pack, build_segments, render_episode
+from pipeline import DEFAULT_VOICES, GEMINI_VOICES, GEMINI_VOICE_PROFILES, GEMINI_TTS_MODEL, AGNES_VIDEO_MODELS, GEMINI_TTS_MODELS, generate_shot, list_chinese_voices, synthesize_preview, generate_character_voice_pack, build_segments, render_episode
 from script_parser import analyze_script, save_storyboard
 
 ROOT=Path(__file__).resolve().parent; DATA=ROOT/"cache"; DATA.mkdir(exist_ok=True)
@@ -14,7 +14,9 @@ def load(p,d):
     try:return json.loads(p.read_text("utf-8"))
     except:return d
 
-project=load(SETTINGS,{"voices":DEFAULT_VOICES.copy(),"voice_settings":{}})
+project=load(SETTINGS,{"voices":DEFAULT_VOICES.copy(),"voice_settings":{},"video_model":"agnes-video-2.5-flash","gemini_tts_model":GEMINI_TTS_MODEL})
+project.setdefault("voices",DEFAULT_VOICES.copy()); project.setdefault("voice_settings",{})
+project.setdefault("video_model","agnes-video-2.5-flash"); project.setdefault("gemini_tts_model",GEMINI_TTS_MODEL)
 try: VOICE_OPTIONS=list_chinese_voices()
 except Exception: VOICE_OPTIONS=sorted(set(DEFAULT_VOICES.values()))
 with st.sidebar:
@@ -22,11 +24,27 @@ with st.sidebar:
     api_key=st.text_input("Agnes API Key",type="password")
     base_url=st.text_input("API Base URL","https://apihub.agnes-ai.com/v1")
     text_model=st.text_input("剧本/分镜 AI Model","agnes-3.0-flash")
-    video_model=st.text_input("动画 Video Model","agnes-video-2.5-flash")
+    st.markdown("### 🎞️ Agnes 视频模型版本")
+    video_options=list(AGNES_VIDEO_MODELS.keys())+["自定义"]
+    saved_video=project.get("video_model","agnes-video-2.5-flash")
+    video_choice=saved_video if saved_video in video_options else "自定义"
+    video_model=st.selectbox("视频模型",video_options,index=video_options.index(video_choice))
+    if video_model=="自定义":
+        video_model=st.text_input("自定义 Agnes 视频 Model",saved_video if saved_video not in video_options else "agnes-video-2.5-flash")
+    st.caption(AGNES_VIDEO_MODELS.get(video_model,"自定义模型；参数协议按模型名自动判断。"))
+    project["video_model"]=video_model
     st.divider(); st.header("🔊 配音引擎")
     tts_provider=st.radio("选择配音",["Gemini TTS","Edge TTS"],index=0,key="tts_provider")
     gemini_api_key=st.text_input("Gemini API Key",type="password",help="Google AI Studio / Gemini API Key")
-    gemini_model=st.selectbox("Gemini TTS 模型",[GEMINI_TTS_MODEL,"gemini-2.5-flash-preview-tts","gemini-2.5-pro-preview-tts"],index=0)
+    st.markdown("### 🎙️ Gemini TTS 模型版本")
+    gemini_options=list(GEMINI_TTS_MODELS.keys())+["自定义"]
+    saved_gemini=project.get("gemini_tts_model",GEMINI_TTS_MODEL)
+    gemini_choice=saved_gemini if saved_gemini in gemini_options else "自定义"
+    gemini_model=st.selectbox("Gemini TTS 模型",gemini_options,index=gemini_options.index(gemini_choice))
+    if gemini_model=="自定义":
+        gemini_model=st.text_input("自定义 Gemini TTS Model",saved_gemini if saved_gemini not in gemini_options else GEMINI_TTS_MODEL)
+    st.caption(GEMINI_TTS_MODELS.get(gemini_model,"自定义 Gemini TTS 模型。"))
+    project["gemini_tts_model"]=gemini_model
     if tts_provider=="Gemini TTS":
         st.caption("Gemini 会根据角色设定 + 当前台词控制语气、节奏和表演。")
     st.divider(); st.header("角色声音（全项目复用）")
@@ -108,6 +126,7 @@ with t3:
     if not data["shots"]: st.info("请先完成剧本分析。")
     else:
         st.write(f"当前：{len(data.get('segments',[]))} 个约12秒剧情片段，{len(data['shots'])} 个镜头。")
+        st.caption(f"当前视频模型：{video_model} · 当前 TTS 模型：{gemini_model if tts_provider=="Gemini TTS" else "Edge TTS"}")
         if st.button("🚀 开始生成整集",type="primary"):
             if not api_key: st.error("请填写 Agnes API Key")
             else:
@@ -116,6 +135,7 @@ with t3:
                 try:
                     if tts_provider=="Gemini TTS" and not gemini_api_key:
                         raise RuntimeError("请选择 Gemini TTS 后填写 Gemini API Key")
+                    SETTINGS.write_text(json.dumps(project,ensure_ascii=False,indent=2),encoding="utf-8")
                     episode, segments=render_episode(api_key,base_url,video_model,data,project["voices"],project["voice_settings"],progress,bar,"gemini" if tts_provider=="Gemini TTS" else "edge",gemini_api_key,gemini_model)
                     for seg_no, path in segments:
                         st.markdown(f"### 片段 {seg_no:03d}")
