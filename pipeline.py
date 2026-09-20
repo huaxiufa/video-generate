@@ -8,6 +8,16 @@ DEFAULT_VOICES={"林默":"zh-CN-YunxiNeural","苏晚":"zh-CN-XiaoxiaoNeural","�
 GEMINI_VOICES={"林默":"Leda","苏晚":"Iapetus","顾言":"Schedar","零":"Charon","韩成":"Gacrux","警员":"Puck","沈哲":"Orus","陈凯":"Zubenelgenubi","周启":"Alnilam"}
 GEMINI_VOICE_PROFILES={"林默":"young male, cool and clean, mid-low register, slightly breathy, restrained, observant; slow measured pace; never hot-blooded or anime-like","苏晚":"young female, clear and cool, rational and evidence-first, medium register, slightly brisk; not sweet, not sexy","顾言":"male, mid-low, dry and relaxed, technical/nerdy, concise with mild dry humor","零":"male, low-mid, calm, slow, mysterious with a slight smile; not villainous, not gangster, not CEO","韩成":"male detective, thick low-mid, slightly tired, professional and realistic; never shouting","警员":"ordinary young adult male, medium register, slightly fast and nervous; realistic, not heroic or comic","沈哲":"ordinary office worker, medium register, tired, realistic, restrained","陈凯":"ordinary colleague, medium register, slightly fast and nervous, evasive but not villainous","周启":"finance supervisor, calm, warm and polite, controlled low-mid voice, normal sounding; gradually colder under pressure, never cartoon-villain"}
 GEMINI_TTS_MODEL="gemini-3.1-flash-tts-preview"
+AGNES_VIDEO_MODELS={
+    "agnes-video-2.5-flash":"Agnes Video 2.5 Flash（4–12秒，720P）",
+    "agnes-video-2.5":"Agnes Video 2.5（4–12秒）",
+    "agnes-video-v2.0":"Agnes Video v2.0（旧协议，24fps）",
+}
+GEMINI_TTS_MODELS={
+    "gemini-3.1-flash-tts-preview":"Gemini 3.1 Flash TTS（当前默认）",
+    "gemini-2.5-flash-preview-tts":"Gemini 2.5 Flash TTS",
+    "gemini-2.5-pro-preview-tts":"Gemini 2.5 Pro TTS",
+}
 
 def _extract_gemini_audio(data):
     """兼容 Interactions API 的不同音频返回结构。"""
@@ -112,7 +122,14 @@ def probe(p):
 
 def generate_video(api_key,base_url,model,shot,progress=None):
     h={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"}
-    payload={"model":model,"mode":"text","prompt":f"Cinematic animated mystery drama. Scene: {shot['scene']}. Visual: {shot['visual']}. Shot: {shot['shot_size']}. Camera: {shot['camera']}. No dialogue, no text, no subtitles.","seconds":str(int(shot["duration"])),"size":"720P","aspect_ratio":"16:9","n":1}
+    prompt=f"Cinematic animated mystery drama. Scene: {shot['scene']}. Visual: {shot['visual']}. Shot: {shot['shot_size']}. Camera: {shot['camera']}. No dialogue, no text, no subtitles."
+    duration=int(shot["duration"])
+    if model.startswith("agnes-video-2.5"):
+        payload={"model":model,"mode":"text","prompt":prompt,"seconds":str(duration),"size":"720P","aspect_ratio":"16:9","n":1}
+    elif model=="agnes-video-v2.0":
+        payload={"model":model,"prompt":prompt,"width":1152,"height":768,"num_frames":duration*24,"frame_rate":24}
+    else:
+        payload={"model":model,"mode":"text","prompt":prompt,"seconds":str(duration),"size":"720P","aspect_ratio":"16:9","n":1}
     tasks=CACHE/"tasks.json"; data=json.loads(tasks.read_text("utf-8")) if tasks.exists() else {}; item=data.get(str(shot["id"]),{})
     vid=item.get("video_id"); url=item.get("video_url")
     if not vid and not url:
@@ -124,7 +141,10 @@ def generate_video(api_key,base_url,model,shot,progress=None):
         deadline=time.time()+int(os.getenv("AGNES_POLL_TIMEOUT","1800"))
         while time.time()<deadline:
             try:
-                r=requests.get(base_url.rstrip("/")+"/agnesapi",params={"video_id":vid,"model_name":model},headers=h,timeout=60); r.raise_for_status(); st=r.json()
+                poll_params={"video_id":vid}
+                if model.startswith("agnes-video-2.5"):
+                    poll_params["model_name"]=model
+                r=requests.get(base_url.rstrip("/")+"/agnesapi",params=poll_params,headers=h,timeout=60); r.raise_for_status(); st=r.json()
             except requests.RequestException:
                 time.sleep(10); continue
             status=st.get("status")
