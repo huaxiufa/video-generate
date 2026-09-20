@@ -56,6 +56,12 @@ function cleanOriginalUi(){
     const wrap=a.closest('nav,footer,aside,.sidebar-card');
     if(wrap) wrap.style.display='none'; else a.style.display='none';
   });
+  body.querySelectorAll('aside').forEach(aside=>{
+    const txt=(aside.innerText||'').trim();
+    if(!txt || (/支持项目|快速入口/.test(txt) && !aside.querySelector('[class*="timeline"], [class*="Timeline"]'))){
+      aside.style.display='none';
+    }
+  });
   body.querySelectorAll('.sidebar-card').forEach(card=>{
     const text=(card.innerText||'').trim();
     if(/支持项目|快速入口|给个 Star|更多创作方向|在线体验|Prompt 技巧|API 文档|模型概览/.test(text)){
