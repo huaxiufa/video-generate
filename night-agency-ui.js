@@ -11,7 +11,8 @@ const characterVoices={
 };
 const defaults={provider:'gemini_moss',model:'gemini-3.1-flash-tts-preview'};
 const saved=JSON.parse(localStorage.getItem(K)||'{}');
-const state=Object.assign({},defaults,saved);
+const state=Object.assign({speed:1.0,roleSpeeds:{}},defaults,saved);
+const SPEEDS=[0.8,0.9,1.0,1.1,1.2];
 const roles=Object.keys(characterVoices);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const panel=document.createElement('div');
@@ -19,6 +20,8 @@ panel.style.cssText='position:fixed;right:18px;top:18px;z-index:99999;background
 panel.innerHTML='<b>🌙 夜行事务所语音</b>'+
 '<div style="margin-top:8px;opacity:.78">角色音色由人物设定自动匹配<br>无需手动选择声音</div>'+
 '<label style="display:block;margin-top:10px">当前角色<select id=na-r style="width:100%;margin-top:4px;padding:5px">'+roles.map(x=>'<option>'+x+'</option>').join('')+'</select></label>'+
+'<label style="display:block;margin-top:10px">全局语速<select id=na-speed style="width:100%;margin-top:4px;padding:5px">'+SPEEDS.map(x=>'<option value="'+x+'">'+x+'×</option>').join('')+'</select></label>'+
+'<label style="display:block;margin-top:8px">当前角色语速<select id=na-role-speed style="width:100%;margin-top:4px;padding:5px">'+SPEEDS.map(x=>'<option value="'+x+'">'+x+'×</option>').join('')+'</select></label>'+
 '<div id=na-info style="margin-top:8px;line-height:1.5"></div>'+
 '<button id=na-s style="width:100%;margin-top:8px;padding:6px;border:0;border-radius:8px;background:#7c5cff;color:#fff">保存角色配置</button>'+
 '<small id=na-t style="display:block;margin-top:8px;opacity:.75">首次使用角色调用 Gemini，之后自动使用该角色的声音。</small>';
@@ -28,8 +31,13 @@ function updateInfo(){
  const c=characterVoices[$('na-r').value];
  $('na-info').innerHTML='<b>'+esc($('na-r').value)+'</b><br>性别：'+c.gender+'　年龄：'+c.age+'<br>人物音色：'+esc(c.style)+'<br>Gemini 音色：'+c.voice;
 }
-$('na-r').value=state.role||'林默'; updateInfo();
-$('na-r').onchange=()=>{state.role=$('na-r').value;updateInfo()};
+$('na-r').value=state.role||'林默';
+$('na-speed').value=String(state.speed||1.0);
+function roleSpeed(){return Number((state.roleSpeeds||{})[$('na-r').value]||state.speed||1.0)}
+$('na-role-speed').value=String(roleSpeed());
+$('na-r').onchange=()=>{state.role=$('na-r').value;updateInfo();$('na-role-speed').value=String(roleSpeed())};
+$('na-speed').onchange=()=>{state.speed=Number($('na-speed').value);$('na-role-speed').value=String(roleSpeed())};
+$('na-role-speed').onchange=()=>{state.roleSpeeds=state.roleSpeeds||{};state.roleSpeeds[$('na-r').value]=Number($('na-role-speed').value)};
 $('na-s').onclick=()=>{localStorage.setItem(K,JSON.stringify(state));$('na-t').textContent='已保存：'+state.role+'，系统将自动使用该角色默认音色。'};
 const origFetch=window.fetch;
 window.fetch=async function(input,init={}){
@@ -39,7 +47,7 @@ window.fetch=async function(input,init={}){
    const role=state.role||'林默', c=characterVoices[role]||characterVoices['林默'];
    if(state.provider==='gemini_moss'){
     init.body.set('audio_enabled','true');
-    init.body.set('audio_voice','__NA_TTS__|gemini_moss|'+role+'|'+c.voice+'|'+state.model);
+    init.body.set('audio_voice','__NA_TTS__|gemini_moss|'+role+'|'+c.voice+'|'+state.model+'|'+roleSpeed());
    }
   }
  }catch(e){}
