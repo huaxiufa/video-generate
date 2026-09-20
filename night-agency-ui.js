@@ -15,7 +15,9 @@ const state=Object.assign({speed:1.0,roleSpeeds:{},forceGemini:{}},defaults,save
 const SPEEDS=[0.8,0.9,1.0,1.1,1.2];
 const roles=Object.keys(characterVoices);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const oldPanel=document.getElementById('night-agency-voice-panel'); if(oldPanel) oldPanel.remove();
 const panel=document.createElement('div');
+panel.id='night-agency-voice-panel';
 panel.style.cssText='position:fixed;right:18px;top:18px;z-index:99999;background:rgba(20,20,24,.96);color:#fff;padding:14px 16px;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.35);font:13px system-ui;min-width:270px';
 panel.innerHTML='<b>🌙 夜行事务所语音</b>'+
 '<div style="margin-top:8px;opacity:.78">角色音色由人物设定自动匹配<br>无需手动选择声音</div>'+
@@ -39,6 +41,8 @@ $('na-r').onchange=()=>{state.role=$('na-r').value;updateInfo();$('na-role-speed
 $('na-speed').onchange=()=>{state.speed=Number($('na-speed').value);$('na-role-speed').value=String(roleSpeed())};
 $('na-role-speed').onchange=()=>{state.roleSpeeds=state.roleSpeeds||{};state.roleSpeeds[$('na-r').value]=Number($('na-role-speed').value)};
 $('na-s').onclick=()=>{localStorage.setItem(K,JSON.stringify(state));$('na-t').textContent='已保存：'+state.role+'。首次/重建用 Gemini，后续自动用声音克隆。'}; $('na-g').onclick=()=>{state.forceGemini=state.forceGemini||{};state.forceGemini[$('na-r').value]=true;localStorage.setItem(K,JSON.stringify(state));$('na-t').textContent='已标记：下一次生成该角色会重新调用 Gemini，之后恢复克隆。'};
+const oldAudioCards=()=>{document.querySelectorAll('.glass-card').forEach(card=>{const t=(card.innerText||'').trim();if(/音频配置|Audio Config|voice role|speech rate/i.test(t)&&/启用旁白|enable narration/i.test(t))card.remove();});};
+oldAudioCards();
 const origFetch=window.fetch;
 window.fetch=async function(input,init={}){
  try{
