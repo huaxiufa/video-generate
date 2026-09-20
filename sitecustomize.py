@@ -16,7 +16,7 @@ _LOG=logging.getLogger("NightAgency")
 # 夜行事务所自己的 Agnes 视频调用层。
 # 只接管 submit_video；后面的官方轮询/下载/合成流程继续复用 lcy 基础项目，
 # 因而不会破坏它现有的任务、断点续传、Key 轮换和进度系统。
-def _na_video_payload(self, prompt, reference_image_paths, duration, width, height, seed, negative_prompt, **kwargs):
+async def _na_video_payload(self, prompt, reference_image_paths, duration, width, height, seed, negative_prompt, **kwargs):
     model=self.model
     duration=int(duration or 5)
     refs=reference_image_paths or []
