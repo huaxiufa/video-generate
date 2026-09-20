@@ -9,7 +9,9 @@ GEMINI_VOICES={"林默":"Leda","苏晚":"Iapetus","顾言":"Schedar","零":"Char
 GEMINI_VOICE_PROFILES={"林默":"young male, cool and clean, mid-low register, slightly breathy, restrained, observant; slow measured pace; never hot-blooded or anime-like","苏晚":"young female, clear and cool, rational and evidence-first, medium register, slightly brisk; not sweet, not sexy","顾言":"male, mid-low, dry and relaxed, technical/nerdy, concise with mild dry humor","零":"male, low-mid, calm, slow, mysterious with a slight smile; not villainous, not gangster, not CEO","韩成":"male detective, thick low-mid, slightly tired, professional and realistic; never shouting","警员":"ordinary young adult male, medium register, slightly fast and nervous; realistic, not heroic or comic","沈哲":"ordinary office worker, medium register, tired, realistic, restrained","陈凯":"ordinary colleague, medium register, slightly fast and nervous, evasive but not villainous","周启":"finance supervisor, calm, warm and polite, controlled low-mid voice, normal sounding; gradually colder under pressure, never cartoon-villain"}
 GEMINI_TTS_MODEL="gemini-3.1-flash-tts-preview"
 MOSS_TTS_COMMAND=os.getenv("MOSS_TTS_COMMAND","python -m moss_tts_nano.cli")
-MOSS_TTS_ONNX_MODEL_DIR=os.getenv("MOSS_TTS_ONNX_MODEL_DIR","")
+MOSS_TTS_ONNX_MODEL_DIR=os.getenv("MOSS_TTS_ONNX_MODEL_DIR","/app/models/MOSS-TTS-Nano-100M-ONNX-int8")
+MOSS_TTS_INT8_REPO=os.getenv("MOSS_TTS_INT8_REPO","REALBITS/MOSS-TTS-Nano-100M-ONNX-int8")
+MOSS_TTS_CODEC_REPO=os.getenv("MOSS_TTS_CODEC_REPO","OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX")
 MOSS_TTS_CPU_THREADS=os.getenv("MOSS_TTS_CPU_THREADS","4")
 AGNES_VIDEO_MODELS={
     "agnes-video-2.5-flash":"Agnes Video 2.5 Flash（4–12秒，720P）",
@@ -110,8 +112,40 @@ def _prepare_voice_reference(source, ref_path):
     else:
         subprocess.run(["ffmpeg","-y","-i",str(source),"-af",f"apad=pad_dur={max(0,3.0-duration):.3f}","-t","3.0","-ar","24000","-ac","1","-c:a","pcm_s16le",str(ref_path)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)
 
+def _ensure_moss_int8_models(progress=None):
+    """首次运行自动下载 INT8 TTS 模型和官方 Audio Tokenizer，之后复用本地缓存。"""
+    model_dir=Path(MOSS_TTS_ONNX_MODEL_DIR)
+    manifest=model_dir/"browser_poc_manifest.json"
+    codec_dir=model_dir.parent/"MOSS-Audio-Tokenizer-Nano-ONNX"
+    codec_meta=codec_dir/"codec_browser_onnx_meta.json"
+    if manifest.exists() and codec_meta.exists():
+        return
+    try:
+        from huggingface_hub import snapshot_download
+    except Exception as e:
+        raise RuntimeError(f"MOSS INT8 模型需要 huggingface_hub：{e}") from e
+    model_dir.mkdir(parents=True,exist_ok=True)
+    codec_dir.mkdir(parents=True,exist_ok=True)
+    if not manifest.exists():
+        if progress: progress("MOSS-TTS-Nano",f"首次下载 INT8 模型：{MOSS_TTS_INT8_REPO}（约198MB）")
+        snapshot_download(
+            repo_id=MOSS_TTS_INT8_REPO,
+            local_dir=str(model_dir),
+            local_dir_use_symlinks=False,
+            allow_patterns=["*.onnx","*.data","*.json","tokenizer.model"],
+        )
+    if not codec_meta.exists():
+        if progress: progress("MOSS-TTS-Nano","首次下载 Audio Tokenizer ONNX")
+        snapshot_download(
+            repo_id=MOSS_TTS_CODEC_REPO,
+            local_dir=str(codec_dir),
+            local_dir_use_symlinks=False,
+            allow_patterns=["*.onnx","*.data","*.json"],
+        )
+
 def moss_tts(text, role, ref_path, path, progress=None):
-    """MOSS-TTS-Nano ONNX CPU 零样本音色克隆。"""
+    """MOSS-TTS-Nano INT8 ONNX CPU 零样本音色克隆。"""
+    _ensure_moss_int8_models(progress)
     if not ref_path.exists():
         raise RuntimeError(f"角色 {role} 的声音母带不存在：{ref_path}")
     import shlex, tempfile
@@ -237,7 +271,7 @@ def make_timeline(shot,voices,settings,progress=None,tts_provider="edge",gemini_
         is_moss=(tts_provider=="gemini_moss")
         voice=GEMINI_VOICES.get(role,"Kore") if (is_gemini or is_moss) else voices.get(role,DEFAULT_VOICES.get(role,"zh-CN-YunxiNeural"))
         profile=GEMINI_VOICE_PROFILES.get(role,"realistic Chinese character voice") if (is_gemini or is_moss) else ""
-        cache_payload=json.dumps({"provider":tts_provider,"model":gemini_model if (is_gemini or is_clone) else ("moss-tts-nano" if is_moss else "edge"),"role":role,"text":d["text"],"voice":voice,"profile":profile,"settings":cfg if not (is_gemini or is_clone or is_moss) else {}},ensure_ascii=False,sort_keys=True)
+        cache_payload=json.dumps({"provider":tts_provider,"model":gemini_model if (is_gemini or is_clone) else ("moss-tts-nano" if is_moss else "edge"),"role":role,"text":d["text"],"voice":voice,"profile":profile,"settings":cfg if not (is_gemini or is_moss) else {}},ensure_ascii=False,sort_keys=True)
         cache_key=hashlib.sha256(cache_payload.encode("utf-8")).hexdigest()[:24]
         cache_path=cache_dir/f"{cache_key}.wav"; p=AUDIO/f"shot_{shot['id']:03d}_{i:02d}.wav"
         voice_dir=AUDIO/"voices"; voice_dir.mkdir(parents=True,exist_ok=True)
