@@ -147,7 +147,7 @@ sub.write_text(ss)
 
 # Strengthen character consistency: generate a reusable multi-character reference sheet
 # instead of describing only the protagonist. The same sheet is then reused by all scenes.
-char_file = root / 'core/screenwriter/characters.py'
+char_file = Path('/opt/agnes-base/core/screenwriter/characters.py')
 if char_file.exists():
     cs = char_file.read_text()
     cs = cs.replace(
