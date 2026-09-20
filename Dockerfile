@@ -5,7 +5,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ffmpeg font
 RUN git clone --depth 1 https://github.com/lcy362/agnes-video-generator.git /opt/agnes-base
 COPY sitecustomize.py /app/sitecustomize.py
 COPY night-agency-ui.js /app/night-agency-ui.js
-RUN pip install --no-cache-dir --default-timeout=600 -r /opt/agnes-base/requirements.txt  && pip install --no-cache-dir --default-timeout=600 --retries 8 --no-deps git+https://github.com/OpenMOSS/MOSS-TTS-Nano.git
+RUN pip install --no-cache-dir --default-timeout=600 -r /opt/agnes-base/requirements.txt \
+ && rm -rf /tmp/MOSS-TTS-Nano \
+ && for i in 1 2 3 4 5; do \
+      git -c http.version=HTTP/1.1 clone --depth 1 --single-branch --no-tags https://github.com/OpenMOSS/MOSS-TTS-Nano.git /tmp/MOSS-TTS-Nano && break; \
+      rm -rf /tmp/MOSS-TTS-Nano; sleep 5; \
+    done \
+ && test -f /tmp/MOSS-TTS-Nano/pyproject.toml \
+ && pip install --no-cache-dir --default-timeout=600 --no-deps /tmp/MOSS-TTS-Nano \
+ && rm -rf /tmp/MOSS-TTS-Nano
 COPY patch_frontend.py /app/patch_frontend.py
 RUN python /app/patch_frontend.py \
  && cd /opt/agnes-base/frontend \
