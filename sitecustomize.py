@@ -202,7 +202,7 @@ def install():
                         vid = payload.get("video_id") or payload.get("task_id")
                         scene_name = os.path.basename(os.path.normpath(sub_dir))
                         import re as _re
-                        m = _re.match(r"scene_(\\d+)$", scene_name)
+                        m = _re.match(r"scene_(\d+)$", scene_name)
                         state = getattr(self, "_state", None)
                         if m and state is not None and vid:
                             idx = int(m.group(1))
