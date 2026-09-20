@@ -34,6 +34,7 @@ async def _na_video_payload(self, prompt, reference_image_paths, duration, width
             "seconds":seconds,
             "size":size,
             "aspect_ratio":aspect,
+            "n":1,
         }
         if seed is not None:
             payload["seed"]=seed
