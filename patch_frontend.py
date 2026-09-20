@@ -4,11 +4,20 @@ import re
 root = Path('/opt/agnes-base/frontend/src')
 app = root / 'App.vue'
 s = app.read_text()
-# Remove original promotional/support sidebars and external resource navigation.
-s = re.sub(r'\n\s*<!-- Left sidebar -->.*?\n\s*<!-- Main content -->', '\n    <!-- Main content -->', s, flags=re.S)
-s = re.sub(r'\n\s*<!-- Resource links（窄屏可换行） -->.*?</nav>', '', s, flags=re.S)
-s = re.sub(r'\n\s*<!-- Footer -->.*?</footer>', '', s, flags=re.S)
-s = re.sub(r'\n\s*<!-- Right sidebar -->.*?</aside>', '', s, flags=re.S)
+
+# Remove original support/project navigation, resource links, footer and quick-entry sidebars.
+patterns = [
+    (r'\n\s*<!-- Left sidebar -->.*?\n\s*<!-- Main content -->', '\n    <!-- Main content -->'),
+    (r'\n\s*<!-- Resource links（窄屏可换行） -->.*?</nav>', ''),
+    (r'\n\s*<!-- Footer -->.*?</footer>', ''),
+    (r'\n\s*<!-- Right sidebar -->.*?</aside>', ''),
+]
+for pattern, replacement in patterns:
+    s = re.sub(pattern, replacement, s, flags=re.S)
+
+# Remove common promotional/link blocks even when upstream markup changes slightly.
+s = re.sub(r'\n\s*<(?:nav|footer|aside)[^>]*>.*?(?:支持项目|快速入口|给个 Star|更多资源|在线体验|Prompt 技巧|API 文档|模型概览).*?</(?:nav|footer|aside)>', '', s, flags=re.S)
+
 s = s.replace('Agnes Video Generator', '夜行事务所')
 s = s.replace("{{ t('subtitle') }}", '都市悬疑动画 · 剧本成片工作台')
 app.write_text(s)
@@ -24,9 +33,8 @@ s = s.replace(":placeholder=\"t('ideaPlaceholder')\"", ":placeholder=\"'在这�
 s = s.replace('rows="4"', 'rows="14"')
 cf.write_text(s)
 
-# Write a deterministic build marker into the generated frontend HTML so deployment can be verified.
 static_index = Path('/opt/agnes-base/static/index.html')
 if static_index.exists():
     html = static_index.read_text()
-    html = html.replace('<head>', '<head>\\n<meta name="night-agency-ui" content="night-agency-20260920-v2">')
+    html = html.replace('<head>', '<head>\n<meta name="night-agency-ui" content="night-agency-ui-v3">')
     static_index.write_text(html)
