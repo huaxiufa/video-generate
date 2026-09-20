@@ -20,6 +20,7 @@ RUN python /app/patch_frontend.py \
  && npm install --no-audit --no-fund \
  && npm run build \
  && cp /app/night-agency-ui.js /opt/agnes-base/static/night-agency-ui.js \
+ && printf "\n<!-- night-agency-static-v4 -->\n" >> /opt/agnes-base/static/index.html \
  && sed -i 's#</body>#<script src="/static/night-agency-ui.js"></script></body>#' /opt/agnes-base/static/index.html
 ENV PYTHONPATH=/app:/opt/agnes-base
 ENV NA_VOICE_DIR=/app/agnes_data/voices
