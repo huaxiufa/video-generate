@@ -38,3 +38,55 @@ if static_index.exists():
     html = static_index.read_text()
     html = html.replace('<head>', '<head>\n<meta name="night-agency-ui" content="night-agency-ui-v3">')
     static_index.write_text(html)
+
+# Replace the original audio configuration with Night Agency's own voice workflow.
+sub = root / 'components/shared/SubtitleConfig.vue'
+ss = sub.read_text()
+ss = ss.replace("import VoiceSelector from './VoiceSelector.vue'\n", "")
+audio_start = ss.index("  <!-- Audio Config -->")
+audio_end = ss.index("  <!-- Subtitle Config -->")
+night_audio = """  <!-- Night Agency Voice Config -->
+  <div class="glass-card rounded-2xl p-6 mb-4">
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="text-lg font-semibold text-accent">夜行事务所语音</h2>
+        <p class="text-xs text-muted mt-1">角色首次对白由 Gemini 建立声音，之后自动使用该角色的声音克隆。</p>
+      </div>
+      <span class="text-xs text-muted">Gemini → MOSS</span>
+    </div>
+    <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="rounded-xl bg-paper-2/30 border border-rule/50 p-4">
+        <p class="text-sm font-medium text-ink-2">角色声音</p>
+        <p class="text-xs text-muted mt-1">系统会根据剧本人物自动匹配 Gemini 音色，无需使用原项目音色选择器。</p>
+      </div>
+      <div class="rounded-xl bg-paper-2/30 border border-rule/50 p-4">
+        <p class="text-sm font-medium text-ink-2">声音记忆</p>
+        <p class="text-xs text-muted mt-1">第一次生成保存角色声音母版；后续对白直接克隆，不重复调用 Gemini。</p>
+      </div>
+    </div>
+    <div class="mt-4 flex items-center gap-3">
+      <label class="flex items-center gap-2 text-sm text-ink-2 cursor-pointer">
+        <input v-model="audioEnabled" type="checkbox" class="rounded bg-paper-2 border-rule" />
+        <span>启用角色配音</span>
+      </label>
+      <label class="text-sm text-muted">基础语速</label>
+      <select v-model="rate" class="glass-input rounded-lg px-3 py-2 text-sm text-ink">
+        <option value="-30%">0.8×</option>
+        <option value="-15%">0.9×</option>
+        <option value="+0%">1.0×</option>
+        <option value="+15%">1.1×</option>
+        <option value="+30%">1.2×</option>
+      </select>
+    </div>
+  </div>
+
+"""
+ss = ss[:audio_start] + night_audio + ss[audio_end:]
+sub.write_text(ss)
+
+# Build a cache-busting marker into the generated page.
+static_index = Path('/opt/agnes-base/static/index.html')
+if static_index.exists():
+    html = static_index.read_text()
+    html = html.replace('night-agency-ui-v3', 'night-agency-ui-v4')
+    static_index.write_text(html)
