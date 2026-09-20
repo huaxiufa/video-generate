@@ -6,3 +6,4 @@ sentencepiece>=0.1.99
 transformers==4.57.1
 soundfile
 onnxruntime>=1.20.0
+huggingface_hub>=0.30
