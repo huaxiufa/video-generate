@@ -23,3 +23,10 @@ s = s.replace("{{ t('ideaLabel') }} (idea)", '剧本')
 s = s.replace(":placeholder=\"t('ideaPlaceholder')\"", ":placeholder=\"'在这里粘贴《夜行事务所》剧本……\\n\\n建议格式：场景 / 时间 / 人物 / 动作 / 对白。\\n系统会根据剧本生成分镜、视频、角色配音和字幕。'\"")
 s = s.replace('rows="4"', 'rows="14"')
 cf.write_text(s)
+
+# Write a deterministic build marker into the generated frontend HTML so deployment can be verified.
+static_index = Path('/opt/agnes-base/static/index.html')
+if static_index.exists():
+    html = static_index.read_text()
+    html = html.replace('<head>', '<head>\\n<meta name="night-agency-ui" content="night-agency-20260920-v2">')
+    static_index.write_text(html)
