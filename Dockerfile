@@ -19,7 +19,6 @@ COPY patch_runtime.py /app/patch_runtime.py
 COPY scrub_upstream_ui.py /app/scrub_upstream_ui.py
 RUN python /app/patch_frontend.py \
  && python /app/patch_runtime.py \
- && cd /opt/agnes-base/frontend
  && cd /opt/agnes-base/frontend \
  && npm install --no-audit --no-fund \
  && npm run build \
