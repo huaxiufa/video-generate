@@ -15,10 +15,15 @@ RUN pip install --no-cache-dir --default-timeout=600 -r /opt/agnes-base/requirem
  && pip install --no-cache-dir --default-timeout=600 --no-deps /tmp/MOSS-TTS-Nano \
  && rm -rf /tmp/MOSS-TTS-Nano
 COPY patch_frontend.py /app/patch_frontend.py
+COPY patch_runtime.py /app/patch_runtime.py
+COPY scrub_upstream_ui.py /app/scrub_upstream_ui.py
 RUN python /app/patch_frontend.py \
+ && python /app/patch_runtime.py \
+ && cd /opt/agnes-base/frontend
  && cd /opt/agnes-base/frontend \
  && npm install --no-audit --no-fund \
  && npm run build \
+ && python /app/scrub_upstream_ui.py \
  && cp /app/night-agency-ui.js /opt/agnes-base/static/night-agency-ui.js \
  && printf "\n<!-- night-agency-static-v4 -->\n" >> /opt/agnes-base/static/index.html \
  && sed -i 's#</head>#<link rel="stylesheet" href="/static/night-agency-cleanup.css"></head>#' /opt/agnes-base/static/index.html \
