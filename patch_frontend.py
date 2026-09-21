@@ -5,18 +5,20 @@ root = Path('/opt/agnes-base/frontend/src')
 app = root / 'App.vue'
 s = app.read_text()
 
-# Remove original support/project navigation, resource links, footer and quick-entry sidebars.
-patterns = [
-    (r'\n\s*<!-- Left sidebar -->.*?\n\s*<!-- Main content -->', '\n    <!-- Main content -->'),
-    (r'\n\s*<!-- Resource links（窄屏可换行） -->.*?</nav>', ''),
-    (r'\n\s*<!-- Footer -->.*?</footer>', ''),
-    (r'\n\s*<!-- Right sidebar -->.*?</aside>', ''),
-]
-for pattern, replacement in patterns:
-    s = re.sub(pattern, replacement, s, flags=re.S)
+# Remove the upstream author's support/quick-link modules and external resource links.
+# Exact upstream markers are used so the author's modules cannot leak into the Night Agency UI.
+s = re.sub(r'\n\s*<!-- Left sidebar -->.*?(?=\n\s*<!-- Main content -->)', '', s, flags=re.S)
+s = re.sub(r'\n\s*<!-- Resource links（窄屏可换行） -->.*?(?=\n\s*<!-- Config Panel -->)', '', s, flags=re.S)
+s = re.sub(r'\n\s*<!-- Footer -->.*?(?=\n\s*</div>\n\s*<!-- Right sidebar -->)', '', s, flags=re.S)
+s = re.sub(r'\n\s*<!-- Right sidebar -->.*?(?=\n\s*</div>\n\s*</div>\n\s*<!-- Voice Picker Modal -->)', '', s, flags=re.S)
 
-# Remove common promotional/link blocks even when upstream markup changes slightly.
-s = re.sub(r'\n\s*<(?:nav|footer|aside)[^>]*>.*?(?:支持项目|快速入口|给个 Star|更多资源|在线体验|Prompt 技巧|API 文档|模型概览).*?</(?:nav|footer|aside)>', '', s, flags=re.S)
+# Fallback for upstream wording changes.
+s = re.sub(
+    r'\n\s*<(?:nav|footer|aside)[^>]*>.*?(?:支持项目|快速入口|给个 Star|更多资源|在线体验|Prompt 技巧|API 文档|模型概览|Demo|Guides|FAQ|GitHub).*?</(?:nav|footer|aside)>',
+    '',
+    s,
+    flags=re.S,
+)
 
 s = s.replace('Agnes Video Generator', '夜行事务所')
 s = s.replace("{{ t('subtitle') }}", '都市悬疑动画 · 剧本成片工作台')
@@ -99,6 +101,14 @@ if static_index.exists():
     html = static_index.read_text()
     html = html.replace('<head>', '<head>\n<meta name="night-agency-ui" content="night-agency-ui-v3">')
     static_index.write_text(html)
+
+# Final cleanup after all App.vue edits: remove any remaining upstream sidebars/resource/footer.
+app_after = app.read_text()
+app_after = re.sub(r'\n\s*<!-- Left sidebar -->.*?(?=\n\s*<!-- Main content -->)', '', app_after, flags=re.S)
+app_after = re.sub(r'\n\s*<!-- Resource links（窄屏可换行） -->.*?(?=\n\s*<!-- Config Panel -->)', '', app_after, flags=re.S)
+app_after = re.sub(r'\n\s*<!-- Footer -->.*?(?=\n\s*</div>\n\s*<!-- Right sidebar -->)', '', app_after, flags=re.S)
+app_after = re.sub(r'\n\s*<!-- Right sidebar -->.*?(?=\n\s*</div>\n\s*</div>\n\s*<!-- Voice Picker Modal -->)', '', app_after, flags=re.S)
+app.write_text(app_after)
 
 # Replace the original audio configuration with Night Agency's own voice workflow.
 sub = root / 'components/shared/SubtitleConfig.vue'
@@ -210,7 +220,7 @@ if progress.exists():
 static_index = Path('/opt/agnes-base/static/index.html')
 if static_index.exists():
     html = static_index.read_text()
-    html = html.replace('night-agency-ui-v3', 'night-agency-ui-v4')
+    html = html.replace('night-agency-ui-v3', 'night-agency-ui-v5')
     static_index.write_text(html)
 
 # --- Night Agency Agnes 503/keyframe retry patch ---
