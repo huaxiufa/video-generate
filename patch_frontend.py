@@ -5,16 +5,24 @@ root = Path('/opt/agnes-base/frontend/src')
 app = root / 'App.vue'
 s = app.read_text()
 
-# Remove the upstream author's support/quick-link modules and external resource links.
-# Exact upstream markers are used so the author's modules cannot leak into the Night Agency UI.
-s = re.sub(r'\n\s*<!-- Left sidebar -->.*?(?=\n\s*<!-- Main content -->)', '', s, flags=re.S)
-s = re.sub(r'\n\s*<!-- Resource links（窄屏可换行） -->.*?(?=\n\s*<!-- Config Panel -->)', '', s, flags=re.S)
-s = re.sub(r'\n\s*<!-- Footer -->.*?(?=\n\s*</div>\n\s*<!-- Right sidebar -->)', '', s, flags=re.S)
-s = re.sub(r'\n\s*<!-- Right sidebar -->.*?(?=\n\s*</div>\n\s*</div>\n\s*<!-- Voice Picker Modal -->)', '', s, flags=re.S)
+# Remove upstream author UI blocks by their stable Vue comments.
+def _remove_between(text, start_marker, end_marker):
+    a = text.find(start_marker)
+    if a < 0:
+        return text
+    b = text.find(end_marker, a)
+    if b < 0:
+        return text
+    return text[:a] + text[b:]
+
+s = _remove_between(s, '<!-- Left sidebar -->', '<!-- Main content -->')
+s = _remove_between(s, '<!-- Resource links（窄屏可换行） -->', '<!-- Config Panel -->')
+s = _remove_between(s, '<!-- Footer -->', '<!-- Right sidebar -->')
+s = _remove_between(s, '<!-- Right sidebar -->', '<!-- Voice Picker Modal -->')
 
 # Fallback for upstream wording changes.
 s = re.sub(
-    r'\n\s*<(?:nav|footer|aside)[^>]*>.*?(?:支持项目|快速入口|给个 Star|更多资源|在线体验|Prompt 技巧|API 文档|模型概览|Demo|Guides|FAQ|GitHub).*?</(?:nav|footer|aside)>',
+    r'\\n\\s*<(?:nav|footer|aside)[^>]*>.*?(?:支持项目|快速入口|给个 Star|更多资源|在线体验|Prompt 技巧|API 文档|模型概览|Demo|Guides|FAQ|GitHub).*?</(?:nav|footer|aside)>',
     '',
     s,
     flags=re.S,
@@ -99,15 +107,15 @@ cf.write_text(cf_text)
 static_index = Path('/opt/agnes-base/static/index.html')
 if static_index.exists():
     html = static_index.read_text()
-    html = html.replace('<head>', '<head>\n<meta name="night-agency-ui" content="night-agency-ui-v3">')
+    html = html.replace('<head>', '<head>\n<meta name="night-agency-ui" content="night-agency-ui-v5">')
     static_index.write_text(html)
 
-# Final cleanup after all App.vue edits: remove any remaining upstream sidebars/resource/footer.
+# Final exact cleanup after all App.vue edits.
 app_after = app.read_text()
-app_after = re.sub(r'\n\s*<!-- Left sidebar -->.*?(?=\n\s*<!-- Main content -->)', '', app_after, flags=re.S)
-app_after = re.sub(r'\n\s*<!-- Resource links（窄屏可换行） -->.*?(?=\n\s*<!-- Config Panel -->)', '', app_after, flags=re.S)
-app_after = re.sub(r'\n\s*<!-- Footer -->.*?(?=\n\s*</div>\n\s*<!-- Right sidebar -->)', '', app_after, flags=re.S)
-app_after = re.sub(r'\n\s*<!-- Right sidebar -->.*?(?=\n\s*</div>\n\s*</div>\n\s*<!-- Voice Picker Modal -->)', '', app_after, flags=re.S)
+app_after = _remove_between(app_after, '<!-- Left sidebar -->', '<!-- Main content -->')
+app_after = _remove_between(app_after, '<!-- Resource links（窄屏可换行） -->', '<!-- Config Panel -->')
+app_after = _remove_between(app_after, '<!-- Footer -->', '<!-- Right sidebar -->')
+app_after = _remove_between(app_after, '<!-- Right sidebar -->', '<!-- Voice Picker Modal -->')
 app.write_text(app_after)
 
 # Replace the original audio configuration with Night Agency's own voice workflow.
