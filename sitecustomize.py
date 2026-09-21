@@ -26,7 +26,8 @@ async def _na_video_payload(self, prompt, reference_image_paths, duration, width
         size=kwargs.get("video_size") or "720P"
         if model=="agnes-video-2.5-flash":
             size="720P"
-        aspect=self._width_height_to_aspect_ratio(width,height)
+        # 夜行事务所横屏动画统一使用 16:9；不再继承基础项目的 4:3 默认尺寸。
+        aspect="16:9"
         payload={
             "model":model,
             "mode":"text",
@@ -94,7 +95,7 @@ async def _na_video_payload(self, prompt, reference_image_paths, duration, width
             "prompt":prompt,
             "seconds":str(max(4,min(duration,12))),
             "size":"720P",
-            "aspect_ratio":self._width_height_to_aspect_ratio(width,height),
+            "aspect_ratio":"16:9",
         }
         mode_desc="custom-2.5-compatible"
 
