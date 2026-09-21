@@ -319,3 +319,95 @@ if video_api.exists():
         vs = vs.replace(needle, repl, 1)
     video_api.write_text(vs)
 
+
+# --- Night Agency final upstream-author purge ---
+
+# --- Night Agency final upstream-author purge ---
+# Do this as the LAST frontend transform so no later edit can reintroduce
+# the original author's navigation, promotion, footer, sidebar or branding.
+def _strip_html_section(text, start_re, end_re):
+    return re.sub(start_re + r".*?" + end_re, "", text, flags=re.S)
+
+app = root / 'App.vue'
+app_text = app.read_text()
+
+# Exact upstream sections (also works if comments/spacing change slightly).
+app_text = re.sub(r'\s*<!--\s*Left sidebar\s*-->.*?(?=<!--\s*Main content\s*-->)', '\n', app_text, flags=re.S)
+app_text = re.sub(r'\s*<!--\s*Resource links[^>]*-->.*?(?=<!--\s*Config Panel\s*-->)', '\n', app_text, flags=re.S)
+app_text = re.sub(r'\s*<!--\s*Footer\s*-->.*?(?=<!--\s*Right sidebar\s*-->)', '\n', app_text, flags=re.S)
+app_text = re.sub(r'\s*<!--\s*Right sidebar\s*-->.*?(?=<!--\s*Voice Picker Modal\s*-->)', '\n', app_text, flags=re.S)
+
+# Fallback: remove any remaining author-owned navigation/footer/sidebars.
+app_text = re.sub(
+    r'\s*<(?:nav|footer|aside)\b[^>]*>.*?(?:lichuanyang\.top|lcy362|支持项目|快速入口|更多资源|给个 Star|Demo|Guides|FAQ|GitHub).*?</(?:nav|footer|aside)>',
+    '\n',
+    app_text,
+    flags=re.S | re.I,
+)
+
+# Remove original branding wherever it survived.
+app_text = app_text.replace('Agnes Video Generator', '夜行事务所')
+app_text = app_text.replace('AI 视频，一键生成', '都市悬疑动画 · 剧本成片工作台')
+app_text = app_text.replace('{{ t(\'subtitle\') }}', '都市悬疑动画 · 剧本成片工作台')
+app.write_text(app_text)
+
+# ConfigPanel contains several original-site promotional links and the
+# upstream GA/privacy panel. Keep the useful Agnes key/model/workspace controls,
+# but remove the original author's site promotion and analytics UI.
+cfg = root / 'components/ConfigPanel.vue'
+if cfg.exists():
+    c = cfg.read_text()
+    c = re.sub(
+        r'\s*<div class="flex flex-wrap items-center gap-x-5 gap-y-1\.5 mt-3 text-xs">\s*'
+        r'<a href="https://platform\.agnes-ai\.com".*?</div>',
+        '\n',
+        c,
+        flags=re.S,
+    )
+    # Remove the entire upstream privacy/GA panel by its stable section comment.
+    c = re.sub(
+        r'\s*<!--\s*隐私设置（3\.4：GA4 配置开关）\s*-->.*?(?=</template>)',
+        '\n',
+        c,
+        flags=re.S,
+    )
+    # Catch any remaining original-site links inside this panel.
+    c = re.sub(
+        r'\s*<a\b[^>]*href="https://(?:video\.lichuanyang\.top|github\.com/lcy362)[^"]*"[^>]*>.*?</a>',
+        '',
+        c,
+        flags=re.S | re.I,
+    )
+    cfg.write_text(c)
+
+# Also remove original external-link labels that can be rendered by any
+# remaining footer/nav fragment in the compiled source.
+for p in root.rglob('*.vue'):
+    try:
+        t = p.read_text()
+    except Exception:
+        continue
+    if 'video.lichuanyang.top' in t or 'github.com/lcy362/agnes-video-generator' in t:
+        t = re.sub(
+            r'\s*<a\b[^>]*(?:video\.lichuanyang\.top|github\.com/lcy362/agnes-video-generator)[^>]*>.*?</a>',
+            '',
+            t,
+            flags=re.S | re.I,
+        )
+        p.write_text(t)
+
+# Runtime safety net: hide any upstream sidebar/footer that survives a future
+# upstream template change.
+css = Path('/opt/agnes-base/static/night-agency-cleanup.css')
+css.write_text("""
+/* Night Agency: no upstream author promotion/branding */
+.sidebar-card,
+footer:has(a[href*="lichuanyang.top"]),
+footer:has(a[href*="github.com/lcy362"]),
+nav:has(a[href*="lichuanyang.top"]),
+nav:has(a[href*="github.com/lcy362"]),
+aside:has(a[href*="lichuanyang.top"]),
+aside:has(a[href*="github.com/lcy362"]) {
+  display: none !important;
+}
+""")
