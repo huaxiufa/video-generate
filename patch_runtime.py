@@ -67,8 +67,8 @@ if start >= 0:
                             if self._state.character_appearance and not self._state.reference_image:
                                 tags = _localize_preserve_tags(scene_text)
                                 end_frame_prompt = (
-                                    f"{tags['preserve']}\n{self._state.character_appearance}\n"
-                                    f"{tags['keep_identity']}\n\n{tags['change']}\n{end_frame_prompt}"
+                                    f"{tags['preserve']}\\n{self._state.character_appearance}\\n"
+                                    f"{tags['keep_identity']}\\n\\n{tags['change']}\\n{end_frame_prompt}"
                                 )
                             normalized_ref = await self._get_normalized_character_ref(reference_image)
                             img_output = await self.image_generator.generate_single_image(
@@ -126,13 +126,13 @@ if start >= 0:
 
         return all_video_paths
 '''
-    s = s[:start] + new_fn + "\n"
+    s = s[:start] + new_fn + "\\n"
     p.write_text(s)
 
 # Ensure 2.5 requests explicitly ask for one output.
 v = BASE / "core/api/agnes_video.py"
 vs = v.read_text()
-needle = '"aspect_ratio": aspect_ratio,\n        }'
+needle = '"aspect_ratio": aspect_ratio,\\n        }'
 if needle in vs:
-    vs = vs.replace(needle, '"aspect_ratio": aspect_ratio,\n            "n": 1,\n        }', 1)
+    vs = vs.replace(needle, '"aspect_ratio": aspect_ratio,\\n            "n": 1,\\n        }', 1)
 v.write_text(vs)
