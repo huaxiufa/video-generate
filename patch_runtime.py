@@ -67,8 +67,8 @@ if start >= 0:
                             if self._state.character_appearance and not self._state.reference_image:
                                 tags = _localize_preserve_tags(scene_text)
                                 end_frame_prompt = (
-                                    f"{tags['preserve']}\\n{self._state.character_appearance}\\n"
-                                    f"{tags['keep_identity']}\\n\\n{tags['change']}\\n{end_frame_prompt}"
+                                    f"{tags['preserve']}{chr(10)}{self._state.character_appearance}{chr(10)}"
+                                    f"{tags['keep_identity']}{chr(10)}{chr(10)}{tags['change']}{chr(10)}{end_frame_prompt}"
                                 )
                             normalized_ref = await self._get_normalized_character_ref(reference_image)
                             img_output = await self.image_generator.generate_single_image(
