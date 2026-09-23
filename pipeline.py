@@ -1,4 +1,4 @@
-import json, os, subprocess, time, asyncio, hashlib, shutil
+import json, os, subprocess, time, asyncio, hashlib, shutil, random
 from pathlib import Path
 import requests, edge_tts
 ROOT=Path(__file__).resolve().parent; OUT=ROOT/"output"; AUDIO=ROOT/"audio"; CACHE=ROOT/"cache"
@@ -13,6 +13,7 @@ MOSS_TTS_ONNX_MODEL_DIR=os.getenv("MOSS_TTS_ONNX_MODEL_DIR","/app/models/MOSS-TT
 MOSS_TTS_INT8_REPO=os.getenv("MOSS_TTS_INT8_REPO","REALBITS/MOSS-TTS-Nano-100M-ONNX-int8")
 MOSS_TTS_CODEC_REPO=os.getenv("MOSS_TTS_CODEC_REPO","OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX")
 MOSS_TTS_CPU_THREADS=os.getenv("MOSS_TTS_CPU_THREADS","4")
+AGNES_VIDEO_CONCURRENCY=max(1,int(os.getenv("AGNES_VIDEO_CONCURRENCY","2")))
 AGNES_VIDEO_MODELS={
     "agnes-video-2.5-flash":"Agnes Video 2.5 Flash（4–12秒，720P）",
     "agnes-video-2.5":"Agnes Video 2.5（4–12秒）",
@@ -180,7 +181,8 @@ def post_json(url,payload,headers,progress=None):
             try: wait=float(retry_after) if retry_after else 0
             except ValueError: wait=0
             if wait<=0: wait=min(90,10*(2**i))
-            wait=max(3,min(90,int(wait)))
+            # queue_full/5xx 重试加入少量抖动，避免多个镜头同时再次撞满上游队列。
+            wait=max(3,min(90,int(wait+random.uniform(0,4))))
             reason="队列繁忙" if r.status_code==429 or "queue" in body.lower() else f"HTTP {r.status_code}"
             if progress: progress("Agnes",f"{reason}，第 {i+1}/{max_attempts} 次重试，{wait} 秒后重试")
             time.sleep(wait)
@@ -340,7 +342,17 @@ def render(video,cues,shot,progress=None):
     return final
 
 def generate_shot(api_key,base_url,model,shot,voices,settings=None,progress=None,tts_provider="edge",gemini_api_key="",gemini_model=GEMINI_TTS_MODEL):
-    v=generate_video(api_key,base_url,model,shot,progress); cues=make_timeline(shot,voices,settings or {},progress,tts_provider,gemini_api_key,gemini_model); return render(v,cues,shot,progress),cues
+    # 一个镜头的视频完成后立即进入 TTS，不再等待整个批次的视频全部完成。
+    v=generate_video(api_key,base_url,model,shot,progress)
+    cues=make_timeline(shot,voices,settings or {},progress,tts_provider,gemini_api_key,gemini_model)
+    return render(v,cues,shot,progress),cues
+
+async def _generate_shot_async(api_key,base_url,model,shot,voices,settings,progress,tts_provider,gemini_api_key,gemini_model,sem):
+    async with sem:
+        return await asyncio.to_thread(
+            generate_shot,api_key,base_url,model,shot,voices,settings,progress,
+            tts_provider,gemini_api_key,gemini_model
+        )
 
 def build_segments(shots,segments):
     valid={s["id"]:s for s in shots}; out=[]; used=set()
@@ -372,13 +384,24 @@ def concat_mp4s(files,dest,progress=None):
 
 def render_episode(api_key,base_url,model,data,voices,settings=None,progress=None,bar=None,tts_provider="edge",gemini_api_key="",gemini_model=GEMINI_TTS_MODEL):
     shots={s["id"]:s for s in data["shots"]}; segments=build_segments(data["shots"],data.get("segments",[])); segment_paths=[]; total=len(data["shots"]); done=0
-    for seg in segments:
-        paths=[]
-        for sid in seg["shot_ids"]:
+    sem=asyncio.Semaphore(AGNES_VIDEO_CONCURRENCY)
+
+    async def run_segment(seg):
+        async def run_one(sid):
             shot=shots[sid]
             def shot_progress(stage,msg):
                 if progress: progress(stage,msg)
-            final,_=generate_shot(api_key,base_url,model,shot,voices,settings or {},shot_progress,tts_provider,gemini_api_key,gemini_model)
+            return await _generate_shot_async(
+                api_key,base_url,model,shot,voices,settings or {},shot_progress,
+                tts_provider,gemini_api_key,gemini_model,sem
+            )
+        # 保持剧情顺序，但允许多个镜头同时“视频生成 -> 该镜头 TTS -> 合成”。
+        return await asyncio.gather(*(run_one(sid) for sid in seg["shot_ids"]))
+
+    for seg in segments:
+        results=asyncio.run(run_segment(seg))
+        paths=[]
+        for final,_ in results:
             paths.append(final); done+=1
             if bar: bar.progress(min(done/total,1.0))
         segpath=OUT/f"segment_{seg['segment_no']:03d}.mp4"; concat_mp4s(paths,segpath,progress); segment_paths.append((seg["segment_no"],segpath))
