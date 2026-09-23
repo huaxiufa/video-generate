@@ -110,6 +110,15 @@ if static_index.exists():
     html = html.replace('<head>', '<head>\n<meta name="night-agency-ui" content="night-agency-ui-v5">')
     static_index.write_text(html)
 
+
+# Deterministic removal of upstream promotion areas.
+s = app.read_text()
+s = re.sub(r'\\s*<!-- Left sidebar -->.*?</aside>\\s*(?=<!-- Main content -->)', '\\n', s, count=1, flags=re.S)
+s = re.sub(r'\\s*<!-- Resource links（窄屏可换行） -->.*?</nav>\\s*(?=<!-- Config Panel -->)', '\\n', s, count=1, flags=re.S)
+s = re.sub(r'\\s*<!-- Footer -->.*?</footer>\\s*(?=</div>\\s*\\n\\s*<!-- Right sidebar -->)', '\\n', s, count=1, flags=re.S)
+s = re.sub(r'\\s*<!-- Right sidebar -->.*?</aside>\\s*(?=</div>\\s*\\n\\s*</div>)', '\\n', s, count=1, flags=re.S)
+app.write_text(s)
+
 # Final exact cleanup after all App.vue edits.
 app_after = app.read_text()
 app_after = _remove_between(app_after, '<!-- Left sidebar -->', '<!-- Main content -->')
