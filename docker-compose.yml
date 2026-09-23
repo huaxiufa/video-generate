@@ -12,4 +12,8 @@ services:
       - MOSS_TTS_CPU_THREADS=4
     volumes:
       - ./agnes_data:/app/agnes_data
+      # Persist generated episodes/tasks across container rebuilds and reboots.
+      - ./agnes_workspace:/opt/agnes-base/.working_dir
+      # Persist app settings, selected models and saved Agnes keys.
+      - ./agnes_config:/opt/agnes-base/.agnes_config
     restart: unless-stopped
