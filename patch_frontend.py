@@ -15,10 +15,12 @@ def _remove_between(text, start_marker, end_marker):
         return text
     return text[:a] + text[b:]
 
-s = _remove_between(s, '<!-- Left sidebar -->', '<!-- Main content -->')
-s = _remove_between(s, '<!-- Resource links（窄屏可换行） -->', '<!-- Config Panel -->')
-s = _remove_between(s, '<!-- Footer -->', '<!-- Right sidebar -->')
-s = _remove_between(s, '<!-- Right sidebar -->', '<!-- Voice Picker Modal -->')
+# Remove only the marked element itself. Do not remove the wrapper divs
+# between the sections; those wrappers are required by the Vue template.
+s = re.sub(r'\s*<!-- Left sidebar -->.*?</aside>', '\n', s, count=1, flags=re.S)
+s = re.sub(r'\s*<!-- Resource links（窄屏可换行） -->.*?</nav>', '\n', s, count=1, flags=re.S)
+s = re.sub(r'\s*<!-- Footer -->.*?</footer>', '\n', s, count=1, flags=re.S)
+s = re.sub(r'\s*<!-- Right sidebar -->.*?</aside>', '\n', s, count=1, flags=re.S)
 
 # Fallback for upstream wording changes.
 s = re.sub(
@@ -121,10 +123,10 @@ app.write_text(s)
 
 # Final exact cleanup after all App.vue edits.
 app_after = app.read_text()
-app_after = _remove_between(app_after, '<!-- Left sidebar -->', '<!-- Main content -->')
-app_after = _remove_between(app_after, '<!-- Resource links（窄屏可换行） -->', '<!-- Config Panel -->')
-app_after = _remove_between(app_after, '<!-- Footer -->', '<!-- Right sidebar -->')
-app_after = _remove_between(app_after, '<!-- Right sidebar -->', '<!-- Voice Picker Modal -->')
+app_after = re.sub(r'\s*<!-- Left sidebar -->.*?</aside>', '\n', app_after, count=1, flags=re.S)
+app_after = re.sub(r'\s*<!-- Resource links（窄屏可换行） -->.*?</nav>', '\n', app_after, count=1, flags=re.S)
+app_after = re.sub(r'\s*<!-- Footer -->.*?</footer>', '\n', app_after, count=1, flags=re.S)
+app_after = re.sub(r'\s*<!-- Right sidebar -->.*?</aside>', '\n', app_after, count=1, flags=re.S)
 app.write_text(app_after)
 
 # Replace the original audio configuration with Night Agency's own voice workflow.
