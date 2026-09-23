@@ -128,6 +128,10 @@ if start >= 0:
 '''
     s = s[:start] + new_fn + "\\n"
     p.write_text(s)
+    # Fail the image build immediately if the generated upstream module is invalid.
+    compile(s, str(p), "exec")
+    if "chr(10)" not in s:
+        raise RuntimeError("runtime patch did not land: expected chr(10) newline-safe code")
 
 # Ensure 2.5 requests explicitly ask for one output.
 v = BASE / "core/api/agnes_video.py"
