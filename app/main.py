@@ -130,8 +130,22 @@ async def video(pid,s,scene):
         refs=[x["path"] for x in s.get("characters",[]) if x.get("path") and Path(x["path"]).exists()]
         # Agnes 2.5 keyframe mode accepts first/last frames; character references
         # are injected into generated frames instead of images[].
-        task=await agnes("POST","/v1/videos",json=body)
-        tf.write_text(json.dumps(task,ensure_ascii=False,indent=2),encoding="utf-8")
+        # Agnes may temporarily reject new jobs when its video queue is full.
+        # Retry only this transient condition; never duplicate an accepted task.
+        queue_retries=int(os.getenv("AGNES_VIDEO_QUEUE_RETRIES","8"))
+        for attempt in range(1,queue_retries+1):
+            try:
+                task=await agnes("POST","/v1/videos",json=body)
+                tf.write_text(json.dumps(task,ensure_ascii=False,indent=2),encoding="utf-8")
+                break
+            except RuntimeError as e:
+                msg=str(e)
+                if "video_queue_full" not in msg and "queue is full" not in msg:
+                    raise
+                if attempt>=queue_retries:
+                    raise RuntimeError(f"Agnes 视频队列持续繁忙，已自动重试 {queue_retries} 次，最后错误：{msg}")
+                wait=min(30*attempt,180)
+                await asyncio.sleep(wait)
     vid=task.get("video_id") or task.get("id")
     if not vid:raise RuntimeError("Agnes 未返回 video_id")
     while True:
