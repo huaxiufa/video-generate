@@ -101,8 +101,20 @@ async def agnes(method,path,_key_index=None,_return_key_index=False,**kw):
             AGNES_KEY_DISABLED[idx]=now+15
             continue
         if r.is_success:
+            # Agnes may return HTTP 200 with an empty/non-JSON body during
+            # transient video gateway states. Do not report this as a key
+            # failure; surface the actual response for diagnosis.
             agnes_record(idx,path,status=r.status_code)
-            result=r.json()
+            try:
+                result=r.json()
+            except Exception as e:
+                detail=r.text[:2000]
+                agnes_record(idx,path,status=r.status_code,error=f"HTTP 200 但响应不是合法 JSON: {detail or '<empty body>'}")
+                raise RuntimeError(f"Agnes HTTP {r.status_code} 响应解析失败: {detail or '<empty body>'}") from e
+            if not isinstance(result,dict):
+                detail=r.text[:2000]
+                agnes_record(idx,path,status=r.status_code,error=f"HTTP 200 响应不是 JSON 对象: {detail[:500]}")
+                raise RuntimeError(f"Agnes HTTP {r.status_code} 返回格式异常: {detail[:500]}")
             return (result,idx) if _return_key_index else result
         detail=r.text[:2000]
         try:
@@ -262,8 +274,8 @@ async def video(pid,s,scene):
     vid=task.get("video_id") or task.get("id")
     if not vid:raise RuntimeError("Agnes 未返回 video_id")
     submit_key_idx=task.get("_agnes_key_index")
-    poll_interval=max(5,float(os.getenv("AGNES_VIDEO_POLL_INTERVAL","5")))
-    poll_backoff=max(10,float(os.getenv("AGNES_VIDEO_POLL_BACKOFF","10")))
+    poll_interval=max(5,float(os.getenv("AGNES_VIDEO_POLL_INTERVAL","10")))
+    poll_backoff=max(10,float(os.getenv("AGNES_VIDEO_POLL_BACKOFF","15")))
     while True:
         try:
             x=await agnes("GET",f"/agnesapi?video_id={vid}&model_name={model}",_key_index=submit_key_idx)
@@ -279,8 +291,11 @@ async def video(pid,s,scene):
         if status=="completed":break
         if status in {"failed","cancelled","error"}:raise RuntimeError("Agnes 视频任务失败: "+json.dumps(x,ensure_ascii=False))
         await asyncio.sleep(poll_interval)
-    url=x.get("url") or x.get("video_url") or (x.get("data") or {}).get("url")
-    if not url:raise RuntimeError("Agnes 没有返回视频地址")
+    data=x.get("data") if isinstance(x.get("data"),dict) else {}
+    metadata=x.get("metadata") if isinstance(x.get("metadata"),dict) else {}
+    url=x.get("url") or x.get("video_url") or data.get("url") or metadata.get("url")
+    if not url:
+        raise RuntimeError("Agnes 视频任务已完成但没有返回视频地址："+json.dumps(x,ensure_ascii=False)[:2000])
     await download_url(url,out,timeout=900)
 
 async def gemini_tts(text,out,voice):
