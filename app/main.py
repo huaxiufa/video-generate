@@ -226,8 +226,8 @@ async def run(pid):
                     cmd += ["-vf","subtitles="+sub+":fontsdir=/usr/share/fonts/opentype/noto"]
                 cmd+=["-c:v","libx264","-c:a","aac","-shortest",str(d/"final.mp4")]
                 subprocess.run(cmd,check=True)
-            s["stages"][stage]={"status":"done"};s["current_stage"]=i+1;save(pid,s)
-        s["status"]="done";save(pid,s)
+            s["stages"][stage]={"status":"done","progress":100};s["current_stage"]=i+1;s["current_stage_name"]=STAGES[i+1] if i+1<len(STAGES) else "完成";s["progress_percent"]=round(((i+1)/len(STAGES))*100,1);save(pid,s)
+        s["status"]="done";s["progress_percent"]=100;s["current_stage_name"]="完成";save(pid,s)
     except Exception as e:
         s=load(pid);s["status"]="failed";s["error"]=str(e);s["stages"][stage]={"status":"failed","error":str(e)};save(pid,s)
 
@@ -237,7 +237,7 @@ def index():return FileResponse(Path(__file__).parent.parent/"web"/"index.html")
 def create(x:Req):
     if not x.script.strip():raise HTTPException(400,"script 不能为空")
     pid=uuid.uuid4().hex[:12];d=ROOT/pid;d.mkdir()
-    s={"project_id":pid,"script":x.script,"aspect_ratio":x.aspect_ratio,"size":x.size,"status":"pending","current_stage":0,"error":None,"stages":{x:{"status":"pending"} for x in STAGES}}
+    s={"project_id":pid,"script":x.script,"aspect_ratio":x.aspect_ratio,"size":x.size,"status":"pending","current_stage":0,"current_stage_name":STAGES[0],"progress_percent":0,"error":None,"stages":{x:{"status":"pending","progress":0} for x in STAGES}}
     save(pid,s);return s
 @app.post("/api/projects/{pid}/run")
 def start(pid:str,bg:BackgroundTasks):
