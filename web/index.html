@@ -53,7 +53,9 @@ async function poll(){
   stages.innerHTML=names.map(n=>{
     let v=s.stages[n]?.status||"pending";
     let icon=v==="done"?"✓":v==="running"?"▶":v==="failed"?"✕":"○";
-    let p=Number(s.stages[n]?.progress||0);\n    let html="<div class='stage "+v+"'>"+icon+"　"+n+"　"+v+(v==="running"?"　"+p.toFixed(0)+"%":"")+"</div>";\n    html+="<div class='stage-progress'><div class='stage-progress-bar' style='width:"+p+"%'></div></div>";
+    let p=Number(s.stages[n]?.progress||0);
+    let html="<div class='stage "+v+"'>"+icon+"　"+n+"　"+v+(v==="running"?"　"+p.toFixed(0)+"%":"")+"</div>";
+    html+="<div class='stage-progress'><div class='stage-progress-bar' style='width:"+p+"%'></div></div>";
     let err=s.stages[n]?.error;
     if(err)html+="<div class='stage-error'>错误：<br>"+escapeHtml(err)+"</div>";
     return html;
