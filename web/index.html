@@ -8,6 +8,8 @@ textarea,input,select,button{width:100%;box-sizing:border-box;margin:8px 0;paddi
 .progress-wrap{margin:20px 0}.progress-bg{height:18px;background:#292929;border-radius:10px;overflow:hidden;border:1px solid #444}
 .progress-bar{height:100%;width:0%;transition:width .5s ease;background:#4ade80}.progress-text{margin-top:8px;font-size:18px}
 .current{font-size:14px;color:#aaa;margin-top:4px}
+.error-box{margin:14px 0;padding:12px;border:1px solid #7f1d1d;background:#2a1111;color:#ffb4b4;border-radius:8px;white-space:pre-wrap;word-break:break-word}
+.stage-error{margin:6px 0 10px 28px;padding:8px;background:#241313;color:#ffb4b4;border-radius:6px;font-size:13px;white-space:pre-wrap;word-break:break-word}
 </style>
 <h1>Video Generate V2.2</h1>
 <p>只输入脚本，系统自动完成 12 个阶段。项目状态可断点续跑。</p>
@@ -17,6 +19,7 @@ textarea,input,select,button{width:100%;box-sizing:border-box;margin:8px 0;paddi
 <button onclick="start()">开始生成</button>
 <input id="pid" placeholder="项目 ID"><button onclick="resume()">继续生成</button>
 <div id="status"></div>
+<div id="errorBox" class="error-box" style="display:none"></div>
 <div class="progress-wrap">
   <div class="progress-bg"><div id="bar" class="progress-bar"></div></div>
   <div id="progressText" class="progress-text">总体进度 0%</div>
@@ -35,17 +38,25 @@ async function resume(){
   await fetch("/api/projects/"+pid.value+"/run",{method:"POST"});
   clearInterval(timer);timer=setInterval(poll,1200);poll()
 }
+function escapeHtml(v){
+  return String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
 async function poll(){
   let s=await fetch("/api/projects/"+pid.value).then(r=>r.json());
   let pct=Number(s.progress_percent||0);
   bar.style.width=pct+"%";
   progressText.textContent="总体进度 "+pct.toFixed(1)+"%";
   current.textContent=s.status==="done"?"已完成":("当前阶段："+(s.current_stage_name||"准备中"));
-  status.textContent="项目 "+pid.value+" · "+s.status+" · "+(s.error||"");
-  stages.innerHTML=names.map((n,i)=>{
+  status.textContent="项目 "+pid.value+" · "+s.status;
+  if(s.error){errorBox.style.display="block";errorBox.textContent="错误信息：\n"+s.error}
+  else{errorBox.style.display="none";errorBox.textContent=""}
+  stages.innerHTML=names.map(n=>{
     let v=s.stages[n]?.status||"pending";
     let icon=v==="done"?"✓":v==="running"?"▶":v==="failed"?"✕":"○";
-    return "<div class='stage "+v+"'>"+icon+"　"+n+"　"+v+"</div>"
+    let html="<div class='stage "+v+"'>"+icon+"　"+n+"　"+v+"</div>";
+    let err=s.stages[n]?.error;
+    if(err)html+="<div class='stage-error'>错误：<br>"+escapeHtml(err)+"</div>";
+    return html;
   }).join("");
   if(s.status==="done"){
     clearInterval(timer);
