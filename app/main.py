@@ -9,7 +9,8 @@ ROOT=Path(os.getenv("WORK_DIR","/data/projects")); ROOT.mkdir(parents=True,exist
 STAGES=["初始化","场景配置","图片分析","故事生成","角色参考图","脚本编写","尾帧提示词","尾帧生成","视频生成","音频生成","字幕生成","视频拼接"]
 AGNES=os.getenv("AGNES_BASE_URL","https://apihub.agnes-ai.com").rstrip("/")
 TEXT_MODEL=os.getenv("AGNES_TEXT_MODEL","agnes-3.0-flash")
-app=FastAPI(title="Video Generate V2.1")
+app=FastAPI(title="Video Generate V2.2")
+RUNNING=set()
 
 class Req(BaseModel):
     script:str
@@ -81,7 +82,8 @@ async def video(pid,s,scene):
         if scene.get("first_frame_path"):body["first_frame"]=data_uri(scene["first_frame_path"])
         if scene.get("last_frame_path"):body["last_frame"]=data_uri(scene["last_frame_path"])
         refs=[x["path"] for x in s.get("characters",[]) if x.get("path") and Path(x["path"]).exists()]
-        if refs:body["images"]=[data_uri(x) for x in refs[:5]]
+        # Agnes 2.5 keyframe mode accepts first/last frames; character references
+        # are injected into generated frames instead of images[].
         task=await agnes("POST","/v1/videos",json=body)
         tf.write_text(json.dumps(task,ensure_ascii=False,indent=2),encoding="utf-8")
     vid=task.get("video_id") or task.get("id")
@@ -115,10 +117,11 @@ async def gemini_tts(text,out,voice):
     pcm.unlink(missing_ok=True)
 
 async def clone_tts(text,sample,out):
-    cmd=os.getenv("VOICE_CLONE_COMMAND")
-    if not cmd:raise RuntimeError("后续角色台词需要 VOICE_CLONE_COMMAND")
-    p=await asyncio.create_subprocess_exec(*shlex.split(cmd),text,str(sample),str(out))
-    if await p.wait():raise RuntimeError("本地 voice clone 失败")
+    out=Path(out)
+    if out.exists() and out.stat().st_size>1024:return
+    script=os.getenv("MOSS_TTS_SCRIPT","/app/app/moss_clone.py")
+    p=await asyncio.create_subprocess_exec("python",script,text,str(sample),str(out))
+    if await p.wait():raise RuntimeError("MOSS-TTS-Nano voice clone 失败")
 
 async def run(pid):
     s=load(pid);d=ROOT/pid
@@ -159,30 +162,45 @@ async def run(pid):
                     x.update(r)
             elif stage=="尾帧生成":
                 for x in s["scenes"]:
-                    p=d/"images"/f"{x['id']}_last.png"
                     refs=[c["path"] for c in s["characters"] if c.get("path") and c.get("id") in {z.get("character_id") for z in x.get("dialogues",[])}]
-                    await image(x["last_frame_prompt"],p,"1024x576",refs);x["last_frame_path"]=str(p)
-                    if x["id"]>0:
+                    if x["id"]==0:
+                        sp=d/"images"/"0_first.png"
+                        await image(x.get("visual_prompt","")+", opening frame, establish the scene and characters, "+x.get("style",""),sp,"1024x576",refs)
+                        x["first_frame_path"]=str(sp)
+                    else:
                         prev=d/"images"/f"{x['id']-1}_last.png"
                         if prev.exists():x["first_frame_path"]=str(prev)
+                    p=d/"images"/f"{x['id']}_last.png"
+                    await image(x["last_frame_prompt"],p,"1024x576",refs);x["last_frame_path"]=str(p)
             elif stage=="视频生成":
                 for x in s["scenes"]:await video(pid,s,x)
             elif stage=="音频生成":
                 cursor=0.0;subs=[]
                 for x in s["scenes"]:
-                    for j,dia in enumerate(x.get("dialogues",[])):
+                    dialogs=x.get("dialogues",[])
+                    slot=x["seconds"]/max(1,len(dialogs))
+                    for j,dia in enumerate(dialogs):
                         ch=next((c for c in s["characters"] if c["id"]==dia["character_id"]),None)
                         if not ch:continue
                         voice=d/"voices"/(ch["id"]+".wav");out=d/"audio"/f"{x['id']}_{j}.wav"
                         if not voice.exists():
                             await gemini_tts(dia["text"],voice,os.getenv("GEMINI_TTS_VOICE","Kore"))
-                        if voice.exists() and out.exists() is False:
-                            await clone_tts(dia["text"],voice,out)
-                        subs.append({"start":cursor,"end":cursor+max(1.0,x["seconds"]),"text":ch["name"]+": "+dia["text"]});cursor+=x["seconds"]
+                        await clone_tts(dia["text"],voice,out)
+                        start=cursor+j*slot
+                        subs.append({"start":start,"end":start+slot,"text":ch["name"]+": "+dia["text"]})
+                    cursor+=x["seconds"]
                 s["subtitles"]=subs
                 if not subs:raise RuntimeError("没有识别到对白")
             elif stage=="字幕生成":
-                (d/"subtitles.json").write_text(json.dumps(s.get("subtitles",[]),ensure_ascii=False,indent=2),encoding="utf-8")
+                subs=s.get("subtitles",[])
+                (d/"subtitles.json").write_text(json.dumps(subs,ensure_ascii=False,indent=2),encoding="utf-8")
+                def ts(v):
+                    h=int(v//3600);m=int((v%3600)//60);sec=v%60
+                    return "%02d:%02d:%06.3f"%(h,m,sec)
+                srt=[]
+                for n,q in enumerate(subs,1):
+                    srt += [str(n),ts(q["start"])+" --> "+ts(q["end"]),q["text"],""]
+                (d/"subtitles.srt").write_text("\n".join(srt),encoding="utf-8")
             elif stage=="视频拼接":
                 vids=sorted((d/"video").glob("*/video.mp4"),key=lambda p:int(p.parent.name))
                 if not vids:raise RuntimeError("没有视频片段")
@@ -194,6 +212,9 @@ async def run(pid):
                     mix=d/"mix.wav";subprocess.run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(al),"-c:a","pcm_s16le",str(mix)],check=True)
                 cmd=["ffmpeg","-y","-i",str(merged)]
                 if (d/"mix.wav").exists():cmd+=["-i",str(d/"mix.wav")]
+                if (d/"subtitles.srt").exists():
+                    sub=(d/"subtitles.srt").as_posix().replace(":","\\:")
+                    cmd += ["-vf","subtitles="+sub+":fontsdir=/usr/share/fonts/opentype/noto"]
                 cmd+=["-c:v","libx264","-c:a","aac","-shortest",str(d/"final.mp4")]
                 subprocess.run(cmd,check=True)
             s["stages"][stage]={"status":"done"};s["current_stage"]=i+1;save(pid,s)
@@ -212,7 +233,13 @@ def create(x:Req):
 @app.post("/api/projects/{pid}/run")
 def start(pid:str,bg:BackgroundTasks):
     if not load(pid):raise HTTPException(404,"project not found")
-    bg.add_task(run,pid);return {"ok":True,"project_id":pid}
+    if pid in RUNNING:return {"ok":True,"project_id":pid,"already_running":True}
+    RUNNING.add(pid)
+    async def wrapped():
+        try: await run(pid)
+        finally: RUNNING.discard(pid)
+    bg.add_task(wrapped)
+    return {"ok":True,"project_id":pid}
 @app.get("/api/projects/{pid}")
 def state(pid:str):
     s=load(pid)
