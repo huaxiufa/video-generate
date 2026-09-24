@@ -187,7 +187,7 @@ async def run(pid):
                             await gemini_tts(dia["text"],voice,os.getenv("GEMINI_TTS_VOICE","Kore"))
                         await clone_tts(dia["text"],voice,out)
                         start=cursor+j*slot
-                        subs.append({"start":start,"end":start+slot,"text":ch["name"]+": "+dia["text"]})
+                        subs.append({"start":start,"end":start+slot,"text":ch["name"]+": "+dia["text"],"audio_file":str(out)})
                     cursor+=x["seconds"]
                 s["subtitles"]=subs
                 if not subs:raise RuntimeError("没有识别到对白")
@@ -211,7 +211,7 @@ async def run(pid):
                     # Preserve scene/dialogue timing instead of simply concatenating speech.
                     inputs=[];filters=[]
                     for idx,p in enumerate(wavs):
-                        q=next((z for z in s.get("subtitles",[]) if str(z.get("text","")).split(": ",1)[-1] and p.stem in {f"{sc['id']}_{j}" for sc in s["scenes"] for j,_ in enumerate(sc.get("dialogues",[]))}),None)
+                        q=next((z for z in s.get("subtitles",[]) if z.get("audio_file")==str(p)),None)
                         delay=int(max(0,float(q["start"]))*1000) if q else 0
                         inputs += ["-i",str(p)]
                         filters.append(f"[{idx}:a]adelay={delay}|{delay}[a{idx}]")
