@@ -72,6 +72,14 @@ async def agnes(method,path,**kw):
             AGNES_KEY_DISABLED[idx]=now+180
             if method.upper()=="POST" and path=="/v1/videos":
                 continue
+        if r.status_code==429:
+            retry_after=r.headers.get("retry-after")
+            try:
+                cooldown=max(30,min(int(float(retry_after)),600)) if retry_after else 120
+            except ValueError:
+                cooldown=120
+            AGNES_KEY_DISABLED[idx]=now+cooldown
+            continue
         raise last_error
     raise RuntimeError(f"Agnes 所有可用 Key 均失败：{last_error}")
 async def ai_json(prompt):
