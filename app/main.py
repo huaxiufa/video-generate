@@ -31,7 +31,15 @@ AGNES_KEYS=load_agnes_keys()
 AGNES_KEY_INDEX=0
 AGNES_KEY_LOCK=asyncio.Lock()
 AGNES_KEY_DISABLED={}
+AGNES_KEY_STATS={}
 app=FastAPI(title="Video Generate V2.2")
+
+def agnes_key_label(idx):
+    key=AGNES_KEYS[idx] if 0 <= idx < len(AGNES_KEYS) else ""
+    return f"#\{idx+1}(…{key[-4:]})" if len(key) >= 4 else f"#\{idx+1}"
+
+def agnes_record(idx,path,status=None,error=None,retry_after=None):
+    AGNES_KEY_STATS[idx]={"label":agnes_key_label(idx),"path":path,"status":status,"error":error,"retry_after":retry_after,"disabled_until":AGNES_KEY_DISABLED.get(idx,0)}
 RUNNING=set()
 
 class Req(BaseModel):
@@ -87,8 +95,18 @@ async def agnes(method,path,**kw):
             AGNES_KEY_DISABLED[idx]=now+15
             continue
         if r.is_success:
+            agnes_record(idx,path,status=r.status_code)
             return r.json()
         detail=r.text[:2000]
+        try:
+            parsed=r.json(); err_obj=parsed.get("error",{}) if isinstance(parsed,dict) else {}
+            provider_code=err_obj.get("code") or parsed.get("code")
+            provider_message=err_obj.get("message") or parsed.get("message")
+            request_id=err_obj.get("request_id") or parsed.get("request_id")
+        except Exception:
+            provider_code=provider_message=request_id=None
+        diagnostic=" ".join(x for x in [f"code={provider_code}" if provider_code else "",f"message={provider_message}" if provider_message else "",f"request_id={request_id}" if request_id else ""])
+        agnes_record(idx,path,status=r.status_code,error=diagnostic or detail,retry_after=r.headers.get("retry-after"))
         last_error=RuntimeError(f"Agnes API {r.status_code}: {detail}")
         body=r.text.lower()
         if r.status_code==401:
@@ -107,7 +125,14 @@ async def agnes(method,path,**kw):
             AGNES_KEY_DISABLED[idx]=now+cooldown
             continue
         raise last_error
-    raise RuntimeError(f"Agnes 所有可用 Key 均失败：{last_error}")
+    details=[]
+    for idx in sorted(AGNES_KEY_STATS):
+        st=AGNES_KEY_STATS[idx]
+        if st.get("path")==path:
+            err=st.get("error") or ""
+            if len(err)>300: err=err[:300]+"..."
+            details.append(f"{st['label']} {st.get('status') or 'network'}{(' '+err) if err else ''}")
+    raise RuntimeError(f"Agnes 所有可用 Key 均失败：{'；'.join(details) or last_error}")
 async def ai_json(prompt):
     x=await agnes("POST","/v1/chat/completions",json={
         "model":TEXT_MODEL,
@@ -403,6 +428,14 @@ def start(pid:str,bg:BackgroundTasks):
         finally: RUNNING.discard(pid)
     bg.add_task(wrapped)
     return {"ok":True,"project_id":pid}
+@app.get("/api/agnes/status")
+def agnes_status():
+    now=asyncio.get_running_loop().time(); keys=[]
+    for idx in range(len(AGNES_KEYS)):
+        st=dict(AGNES_KEY_STATS.get(idx,{}))
+        keys.append({"key":agnes_key_label(idx),"last_path":st.get("path"),"last_status":st.get("status"),"last_error":st.get("error"),"retry_after":st.get("retry_after"),"cooldown_seconds":max(0,round(AGNES_KEY_DISABLED.get(idx,0)-now))})
+    return {"key_count":len(AGNES_KEYS),"keys":keys}
+
 @app.get("/api/projects/{pid}")
 def state(pid:str):
     s=load(pid)
