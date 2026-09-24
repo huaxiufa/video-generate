@@ -1,35 +1,12 @@
 FROM python:3.11-slim
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DEFAULT_TIMEOUT=600 PIP_RETRIES=8
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends git ffmpeg fonts-noto-cjk libsndfile1 nodejs npm && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 https://github.com/lcy362/agnes-video-generator.git /opt/agnes-base
-COPY sitecustomize.py /app/sitecustomize.py
-COPY night-agency-ui.js /app/night-agency-ui.js
-RUN pip install --no-cache-dir --default-timeout=600 -r /opt/agnes-base/requirements.txt \
- && rm -rf /tmp/MOSS-TTS-Nano \
- && for i in 1 2 3 4 5; do \
-      git -c http.version=HTTP/1.1 clone --depth 1 --single-branch --no-tags https://github.com/OpenMOSS/MOSS-TTS-Nano.git /tmp/MOSS-TTS-Nano && break; \
-      rm -rf /tmp/MOSS-TTS-Nano; sleep 5; \
-    done \
- && test -f /tmp/MOSS-TTS-Nano/pyproject.toml \
- && pip install --no-cache-dir --default-timeout=600 --no-deps /tmp/MOSS-TTS-Nano \
- && rm -rf /tmp/MOSS-TTS-Nano
-COPY patch_frontend.py /app/patch_frontend.py
-COPY patch_runtime.py /app/patch_runtime.py
-COPY scrub_upstream_ui.py /app/scrub_upstream_ui.py
-RUN python /app/patch_frontend.py
-RUN python /app/patch_runtime.py
-RUN echo '--- patched steps_video.py ---' && sed -n '435,450p' /opt/agnes-base/core/pipelines/creative/steps_video.py
-RUN python -m py_compile /opt/agnes-base/core/pipelines/creative/steps_video.py
-RUN cd /opt/agnes-base/frontend && npm install --no-audit --no-fund
-RUN cd /opt/agnes-base/frontend && npm run build
-RUN python /app/scrub_upstream_ui.py
-RUN cp /app/night-agency-ui.js /opt/agnes-base/static/night-agency-ui.js
-RUN printf "\n<!-- night-agency-static-v4 -->\n" >> /opt/agnes-base/static/index.html
-RUN sed -i 's#</head>#<link rel="stylesheet" href="/static/night-agency-cleanup.css"></head>#' /opt/agnes-base/static/index.html
-RUN sed -i 's#</body>#<script src="/static/night-agency-ui.js"></script></body>#' /opt/agnes-base/static/index.html
-ENV PYTHONPATH=/app:/opt/agnes-base
-ENV NA_VOICE_DIR=/app/agnes_data/voices
-WORKDIR /opt/agnes-base
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app ./app
+COPY web ./web
+RUN mkdir -p /data/projects
+ENV WORK_DIR=/data/projects
 EXPOSE 8765
-CMD ["python","server.py"]
+CMD ["uvicorn","app.main:app","--host","0.0.0.0","--port","8765"]

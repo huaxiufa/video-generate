@@ -1,19 +1,12 @@
 services:
-  agnes:
+  app:
     build: .
-    container_name: night-agency
     ports:
       - "8765:8765"
     env_file:
       - .env
     environment:
-      - NA_VOICE_DIR=/app/agnes_data/voices
-      - MOSS_TTS_COMMAND=moss-tts-nano generate
-      - MOSS_TTS_CPU_THREADS=4
+      WORK_DIR: /data/projects
     volumes:
-      - ./agnes_data:/app/agnes_data
-      # Persist generated episodes/tasks across container rebuilds and reboots.
-      - ./agnes_workspace:/opt/agnes-base/.working_dir
-      # Persist app settings, selected models and saved Agnes keys.
-      - ./agnes_config:/opt/agnes-base/.agnes_config
+      - ./data:/data
     restart: unless-stopped
