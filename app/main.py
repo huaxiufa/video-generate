@@ -9,6 +9,12 @@ ROOT=Path(os.getenv("WORK_DIR","/data/projects")); ROOT.mkdir(parents=True,exist
 STAGES=["初始化","场景配置","图片分析","故事生成","角色参考图","脚本编写","尾帧提示词","尾帧生成","视频生成","音频生成","字幕生成","视频拼接"]
 AGNES=os.getenv("AGNES_BASE_URL","https://apihub.agnes-ai.com").rstrip("/")
 TEXT_MODEL=os.getenv("AGNES_TEXT_MODEL","agnes-3.0-flash")
+AGNES_KEYS=[x.strip() for x in os.getenv("AGNES_API_KEYS","").split(",") if x.strip()]
+if not AGNES_KEYS:
+    single=os.getenv("AGNES_API_KEY","").strip()
+    if single: AGNES_KEYS=[single]
+AGNES_KEY_INDEX=0
+AGNES_KEY_LOCK=asyncio.Lock()
 app=FastAPI(title="Video Generate V2.2")
 RUNNING=set()
 
@@ -35,15 +41,17 @@ def set_detail(pid,s,stage,index,total,label):
     save(pid,s)
 
 async def agnes(method,path,**kw):
-    key=os.getenv("AGNES_API_KEY")
-    if not key: raise RuntimeError("AGNES_API_KEY 未配置")
+    global AGNES_KEY_INDEX
+    if not AGNES_KEYS: raise RuntimeError("AGNES_API_KEYS / AGNES_API_KEY 未配置")
+    async with AGNES_KEY_LOCK:
+        key=AGNES_KEYS[AGNES_KEY_INDEX % len(AGNES_KEYS)]
+        AGNES_KEY_INDEX=(AGNES_KEY_INDEX+1) % len(AGNES_KEYS)
     async with httpx.AsyncClient(timeout=300) as c:
         r=await c.request(method,AGNES+path,headers={"Authorization":"Bearer "+key},**kw)
         if r.is_error:
             detail=r.text[:2000]
             raise RuntimeError(f"Agnes API {r.status_code}: {detail}")
         return r.json()
-
 async def ai_json(prompt):
     x=await agnes("POST","/v1/chat/completions",json={
         "model":TEXT_MODEL,
