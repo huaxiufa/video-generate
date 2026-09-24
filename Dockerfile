@@ -3,9 +3,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk git build-essential && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-RUN git clone --depth 1 https://github.com/OpenMOSS/MOSS-TTS-Nano.git /opt/MOSS-TTS-Nano && \
-    pip install --no-cache-dir -r /opt/MOSS-TTS-Nano/requirements.txt && \
-    pip install --no-cache-dir -e /opt/MOSS-TTS-Nano
+RUN git clone --depth 1 https://github.com/OpenMOSS/MOSS-TTS-Nano.git /opt/MOSS-TTS-Nano &&     pip install --no-cache-dir -r /opt/MOSS-TTS-Nano/requirements.txt &&     pip install --no-cache-dir -e /opt/MOSS-TTS-Nano
 COPY app ./app
 COPY web ./web
 RUN mkdir -p /data/projects /data/moss-models
