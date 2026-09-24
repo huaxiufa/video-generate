@@ -1,12 +1,7 @@
 services:
   app:
     build: .
-    ports:
-      - "8765:8765"
-    env_file:
-      - .env
-    environment:
-      WORK_DIR: /data/projects
-    volumes:
-      - ./data:/data
+    ports: ["8765:8765"]
+    env_file: [.env]
+    volumes: ["./data:/data"]
     restart: unless-stopped
