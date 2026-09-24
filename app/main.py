@@ -9,7 +9,7 @@ ROOT=Path(os.getenv("WORK_DIR","/data/projects")); ROOT.mkdir(parents=True,exist
 STAGES=["初始化","场景配置","图片分析","故事生成","角色参考图","脚本编写","尾帧提示词","尾帧生成","视频生成","音频生成","字幕生成","视频拼接"]
 AGNES=os.getenv("AGNES_BASE_URL","https://apihub.agnes-ai.com").rstrip("/")
 TEXT_MODEL=os.getenv("AGNES_TEXT_MODEL","agnes-3.0-flash")
-AGNES_KEYS=[x.strip() for x in os.getenv("AGNES_API_KEYS","").split(",") if x.strip()]
+AGNES_KEYS=[x.strip() for x in os.getenv("AGNES_API_KEYS","").replace("\\r","").splitlines() if x.strip()]
 if not AGNES_KEYS:
     single=os.getenv("AGNES_API_KEY","").strip()
     if single: AGNES_KEYS=[single]
