@@ -32,7 +32,9 @@ async def agnes(method,path,**kw):
     if not key: raise RuntimeError("AGNES_API_KEY 未配置")
     async with httpx.AsyncClient(timeout=300) as c:
         r=await c.request(method,AGNES+path,headers={"Authorization":"Bearer "+key},**kw)
-        r.raise_for_status()
+        if r.is_error:
+            detail=r.text[:2000]
+            raise RuntimeError(f"Agnes API {r.status_code}: {detail}")
         return r.json()
 
 async def ai_json(prompt):
@@ -109,8 +111,12 @@ async def video(pid,s,scene):
     if out.exists() and out.stat().st_size>1024:return
     task=json.loads(tf.read_text(encoding="utf-8")) if tf.exists() else None
     if not task:
-        body={"model":os.getenv("AGNES_VIDEO_MODEL","agnes-video-2.5"),"mode":"keyframe",
-              "prompt":scene["video_prompt"],"seconds":scene["seconds"],"size":s["size"],
+        model=os.getenv("AGNES_VIDEO_MODEL","agnes-video-2.5-flash")
+        # Video 2.5 Flash only accepts 720P and seconds 4-12.
+        size="720P" if model=="agnes-video-2.5-flash" else s["size"]
+        seconds=max(4,min(12,int(scene["seconds"])))
+        body={"model":model,"mode":"keyframe",
+              "prompt":scene["video_prompt"],"seconds":str(seconds),"size":size,
               "aspect_ratio":s["aspect_ratio"],"n":1}
         if scene.get("first_frame_path"):body["first_frame"]=data_uri(scene["first_frame_path"])
         if scene.get("last_frame_path"):body["last_frame"]=data_uri(scene["last_frame_path"])
@@ -122,7 +128,7 @@ async def video(pid,s,scene):
     vid=task.get("video_id") or task.get("id")
     if not vid:raise RuntimeError("Agnes 未返回 video_id")
     while True:
-        x=await agnes("GET",f"/agnesapi?video_id={vid}&model_name={os.getenv('AGNES_VIDEO_MODEL','agnes-video-2.5')}")
+        x=await agnes("GET",f"/agnesapi?video_id={vid}&model_name={model}")
         status=str(x.get("status","")).lower()
         if status=="completed":break
         if status in {"failed","cancelled","error"}:raise RuntimeError("Agnes 视频任务失败: "+json.dumps(x,ensure_ascii=False))
