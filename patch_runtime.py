@@ -126,7 +126,7 @@ if start >= 0:
 
         return all_video_paths
 '''
-    s = s[:start] + new_fn + "\\n"
+    s = s[:start] + new_fn + "\n"
     p.write_text(s)
     # Fail the image build immediately if the generated upstream module is invalid.
     compile(s, str(p), "exec")
