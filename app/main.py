@@ -27,6 +27,13 @@ def save(pid,s):
     t.write_text(json.dumps(s,ensure_ascii=False,indent=2),encoding="utf-8")
     t.replace(d/"state.json")
 
+def set_detail(pid,s,stage,index,total,label):
+    s["current_item"]=index
+    s["total_items"]=total
+    s["current_detail"]=f"{label} {index}/{total}" if total else label
+    s["stages"][stage]["progress"]=round(index/total*100,1) if total else 0
+    save(pid,s)
+
 async def agnes(method,path,**kw):
     key=os.getenv("AGNES_API_KEY")
     if not key: raise RuntimeError("AGNES_API_KEY 未配置")
@@ -165,7 +172,7 @@ async def run(pid):
         s["status"]="running";s["error"]=None;save(pid,s)
         for i,stage in enumerate(STAGES):
             if s["stages"][stage]["status"]=="done":continue
-            s["current_stage"]=i;s["stages"][stage]={"status":"running"};save(pid,s)
+            s["current_stage"]=i;s["stages"][stage]={"status":"running","progress":0};s["current_detail"]="准备中";s["current_item"]=0;s["total_items"]=0;save(pid,s)
             if stage=="初始化":
                 for n in ["images","characters","video","audio","voices"]:(d/n).mkdir(exist_ok=True)
             elif stage=="场景配置":
@@ -173,7 +180,9 @@ async def run(pid):
                 s["scenes"]=plan["scenes"]
                 for i,x in enumerate(s["scenes"]):x["id"]=i;x["seconds"]=int(x.get("duration",8))
             elif stage=="图片分析":
-                for x in s["scenes"]:
+                total=len(s["scenes"])
+                for n,x in enumerate(s["scenes"],1):
+                    set_detail(pid,s,stage,n,total,"分析场景")
                     r=await ai_json("""为这个动画场景生成视觉设计。输出 JSON：{"visual_prompt":"","camera":"","lighting":"","style":"","continuity":""}。保持角色和服装连续。场景："""+json.dumps(x,ensure_ascii=False))
                     x.update(r)
             elif stage=="故事生成":
@@ -184,20 +193,28 @@ async def run(pid):
             elif stage=="角色参考图":
                 r=await ai_json("""从故事场景中识别所有重要角色。输出 JSON：{"characters":[{"id":"","name":"","appearance":"","personality":"","voice_style":""}]}。同一个角色必须使用同一个 id。场景："""+json.dumps(s["scenes"],ensure_ascii=False))
                 s["characters"]=r.get("characters",[])
-                for c in s["characters"]:
+                total=len(s["characters"])
+                for n,c in enumerate(s["characters"],1):
+                    set_detail(pid,s,stage,n,total,"生成角色参考图")
                     c["path"]=str(d/"characters"/(c["id"]+".png"))
                     await image("character reference sheet, full body, neutral pose, clean background, "+c["appearance"],c["path"],"1024x1024")
             elif stage=="脚本编写":
-                for x in s["scenes"]:
+                total=len(s["scenes"])
+                for n,x in enumerate(s["scenes"],1):
+                    set_detail(pid,s,stage,n,total,"编写场景脚本")
                     r=await ai_json("""为一个动画场景写可直接用于视频生成的英文 prompt，并提取对白。输出 JSON：{"video_prompt":"","dialogues":[{"character_id":"","text":""}]}. 不要改变剧情。场景："""+json.dumps(x,ensure_ascii=False)+",角色："+json.dumps(s["characters"],ensure_ascii=False))
                     x.update(r)
                 (d/"script.json").write_text(json.dumps({"story":s.get("story"),"characters":s["characters"],"scenes":s["scenes"]},ensure_ascii=False,indent=2),encoding="utf-8")
             elif stage=="尾帧提示词":
-                for x in s["scenes"]:
+                total=len(s["scenes"])
+                for n,x in enumerate(s["scenes"],1):
+                    set_detail(pid,s,stage,n,total,"生成尾帧提示词")
                     r=await ai_json("""生成下一镜头可衔接的尾帧设计。输出 JSON：{"last_frame_prompt":"","transition_note":""}。保持人物位置、服装、道具连续。当前场景："""+json.dumps(x,ensure_ascii=False))
                     x.update(r)
             elif stage=="尾帧生成":
-                for x in s["scenes"]:
+                total=len(s["scenes"])
+                for n,x in enumerate(s["scenes"],1):
+                    set_detail(pid,s,stage,n,total,"生成尾帧")
                     refs=[c["path"] for c in s["characters"] if c.get("path") and c.get("id") in {z.get("character_id") for z in x.get("dialogues",[])}]
                     if x["id"]==0:
                         sp=d/"images"/"0_first.png"
@@ -209,13 +226,20 @@ async def run(pid):
                     p=d/"images"/f"{x['id']}_last.png"
                     await image(x["last_frame_prompt"],p,"1024x576",refs);x["last_frame_path"]=str(p)
             elif stage=="视频生成":
-                for x in s["scenes"]:await video(pid,s,x)
+                total=len(s["scenes"])
+                for n,x in enumerate(s["scenes"],1):
+                    set_detail(pid,s,stage,n,total,"生成视频片段")
+                    await video(pid,s,x)
             elif stage=="音频生成":
                 cursor=0.0;subs=[]
+                total=sum(len(x.get("dialogues",[])) for x in s["scenes"])
+                item=0
                 for x in s["scenes"]:
                     dialogs=x.get("dialogues",[])
                     slot=x["seconds"]/max(1,len(dialogs))
                     for j,dia in enumerate(dialogs):
+                        item+=1
+                        set_detail(pid,s,stage,item,total,"生成对白音频")
                         ch=next((c for c in s["characters"] if c["id"]==dia["character_id"]),None)
                         if not ch:continue
                         voice=d/"voices"/(ch["id"]+".wav");out=d/"audio"/f"{x['id']}_{j}.wav"
@@ -262,7 +286,7 @@ async def run(pid):
                     cmd += ["-vf","subtitles="+sub+":fontsdir=/usr/share/fonts/opentype/noto"]
                 cmd+=["-c:v","libx264","-c:a","aac","-shortest",str(d/"final.mp4")]
                 subprocess.run(cmd,check=True)
-            s["stages"][stage]={"status":"done","progress":100};s["current_stage"]=i+1;s["current_stage_name"]=STAGES[i+1] if i+1<len(STAGES) else "完成";s["progress_percent"]=round(((i+1)/len(STAGES))*100,1);save(pid,s)
+            s["stages"][stage]={"status":"done","progress":100};s["current_item"]=s.get("total_items",0);s["current_detail"]="阶段完成";s["current_stage"]=i+1;s["current_stage_name"]=STAGES[i+1] if i+1<len(STAGES) else "完成";s["progress_percent"]=round(((i+1)/len(STAGES))*100,1);save(pid,s)
         s["status"]="done";s["progress_percent"]=100;s["current_stage_name"]="完成";save(pid,s)
     except Exception as e:
         s=load(pid);s["status"]="failed";s["error"]=str(e);s["stages"][stage]={"status":"failed","error":str(e)};save(pid,s)
