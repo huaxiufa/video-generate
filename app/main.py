@@ -15,6 +15,7 @@ if not AGNES_KEYS:
     if single: AGNES_KEYS=[single]
 AGNES_KEY_INDEX=0
 AGNES_KEY_LOCK=asyncio.Lock()
+AGNES_KEY_DISABLED=set()
 app=FastAPI(title="Video Generate V2.2")
 RUNNING=set()
 
@@ -43,15 +44,33 @@ def set_detail(pid,s,stage,index,total,label):
 async def agnes(method,path,**kw):
     global AGNES_KEY_INDEX
     if not AGNES_KEYS: raise RuntimeError("AGNES_API_KEYS / AGNES_API_KEY 未配置")
-    async with AGNES_KEY_LOCK:
-        key=AGNES_KEYS[AGNES_KEY_INDEX % len(AGNES_KEYS)]
-        AGNES_KEY_INDEX=(AGNES_KEY_INDEX+1) % len(AGNES_KEYS)
-    async with httpx.AsyncClient(timeout=300) as c:
-        r=await c.request(method,AGNES+path,headers={"Authorization":"Bearer "+key},**kw)
-        if r.is_error:
-            detail=r.text[:2000]
-            raise RuntimeError(f"Agnes API {r.status_code}: {detail}")
-        return r.json()
+    # Multiple keys are failover-aware: invalid tokens are skipped for this process.
+    # This prevents one bad key from aborting the whole pipeline.
+    tried=set()
+    last_error=None
+    for _ in range(len(AGNES_KEYS)):
+        async with AGNES_KEY_LOCK:
+            available=[i for i in range(len(AGNES_KEYS)) if i not in AGNES_KEY_DISABLED and i not in tried]
+            if not available:
+                available=[i for i in range(len(AGNES_KEYS)) if i not in tried]
+            if not available: break
+            start=AGNES_KEY_INDEX % len(AGNES_KEYS)
+            idx=next((i for i in range(start,start+len(AGNES_KEYS)) if i%len(AGNES_KEYS) in available),available[0])
+            idx=idx % len(AGNES_KEYS)
+            AGNES_KEY_INDEX=(idx+1) % len(AGNES_KEYS)
+            key=AGNES_KEYS[idx]
+        tried.add(idx)
+        async with httpx.AsyncClient(timeout=300) as c:
+            r=await c.request(method,AGNES+path,headers={"Authorization":"Bearer "+key},**kw)
+        if r.is_success:
+            return r.json()
+        detail=r.text[:2000]
+        last_error=RuntimeError(f"Agnes API {r.status_code}: {detail}")
+        if r.status_code==401:
+            AGNES_KEY_DISABLED.add(idx)
+            continue
+        raise last_error
+    raise RuntimeError(f"Agnes 所有可用 Key 均失败：{last_error}")
 async def ai_json(prompt):
     x=await agnes("POST","/v1/chat/completions",json={
         "model":TEXT_MODEL,
@@ -124,9 +143,9 @@ async def video(pid,s,scene):
     d=ROOT/pid;sd=d/"video"/str(scene["id"]);sd.mkdir(parents=True,exist_ok=True)
     out=sd/"video.mp4";tf=sd/"task.json"
     if out.exists() and out.stat().st_size>1024:return
+    model=os.getenv("AGNES_VIDEO_MODEL","agnes-video-2.5-flash")
     task=json.loads(tf.read_text(encoding="utf-8")) if tf.exists() else None
     if not task:
-        model=os.getenv("AGNES_VIDEO_MODEL","agnes-video-2.5-flash")
         # Video 2.5 Flash only accepts 720P and seconds 4-12.
         size="720P" if model=="agnes-video-2.5-flash" else s["size"]
         seconds=max(4,min(12,int(scene["seconds"])))
