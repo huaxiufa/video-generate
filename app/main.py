@@ -15,7 +15,7 @@ if not AGNES_KEYS:
     if single: AGNES_KEYS=[single]
 AGNES_KEY_INDEX=0
 AGNES_KEY_LOCK=asyncio.Lock()
-AGNES_KEY_DISABLED=set()
+AGNES_KEY_DISABLED={}
 app=FastAPI(title="Video Generate V2.2")
 RUNNING=set()
 
@@ -44,19 +44,17 @@ def set_detail(pid,s,stage,index,total,label):
 async def agnes(method,path,**kw):
     global AGNES_KEY_INDEX
     if not AGNES_KEYS: raise RuntimeError("AGNES_API_KEYS / AGNES_API_KEY 未配置")
-    # Multiple keys are failover-aware: invalid tokens are skipped for this process.
-    # This prevents one bad key from aborting the whole pipeline.
     tried=set()
     last_error=None
     for _ in range(len(AGNES_KEYS)):
+        now=asyncio.get_running_loop().time()
         async with AGNES_KEY_LOCK:
-            available=[i for i in range(len(AGNES_KEYS)) if i not in AGNES_KEY_DISABLED and i not in tried]
+            available=[i for i in range(len(AGNES_KEYS)) if i not in tried and AGNES_KEY_DISABLED.get(i,0) <= now]
             if not available:
                 available=[i for i in range(len(AGNES_KEYS)) if i not in tried]
             if not available: break
             start=AGNES_KEY_INDEX % len(AGNES_KEYS)
-            idx=next((i for i in range(start,start+len(AGNES_KEYS)) if i%len(AGNES_KEYS) in available),available[0])
-            idx=idx % len(AGNES_KEYS)
+            idx=next((i for i in range(start,start+len(AGNES_KEYS)) if i%len(AGNES_KEYS) in available),available[0]) % len(AGNES_KEYS)
             AGNES_KEY_INDEX=(idx+1) % len(AGNES_KEYS)
             key=AGNES_KEYS[idx]
         tried.add(idx)
@@ -66,9 +64,14 @@ async def agnes(method,path,**kw):
             return r.json()
         detail=r.text[:2000]
         last_error=RuntimeError(f"Agnes API {r.status_code}: {detail}")
+        body=r.text.lower()
         if r.status_code==401:
-            AGNES_KEY_DISABLED.add(idx)
+            AGNES_KEY_DISABLED[idx]=now+3600
             continue
+        if r.status_code==503 and ("video_queue_full" in body or "queue is full" in body):
+            AGNES_KEY_DISABLED[idx]=now+180
+            if method.upper()=="POST" and path=="/v1/videos":
+                continue
         raise last_error
     raise RuntimeError(f"Agnes 所有可用 Key 均失败：{last_error}")
 async def ai_json(prompt):
@@ -170,9 +173,8 @@ async def video(pid,s,scene):
                 if "video_queue_full" not in msg and "queue is full" not in msg:
                     raise
                 if attempt>=queue_retries:
-                    raise RuntimeError(f"Agnes 视频队列持续繁忙，已自动重试 {queue_retries} 次，最后错误：{msg}")
-                wait=min(30*attempt,180)
-                await asyncio.sleep(wait)
+                    raise RuntimeError(f"Agnes 视频队列持续繁忙，已自动尝试 {queue_retries} 轮，最后错误：{msg}")
+                await asyncio.sleep(min(10*attempt,60))
     vid=task.get("video_id") or task.get("id")
     if not vid:raise RuntimeError("Agnes 未返回 video_id")
     while True:
