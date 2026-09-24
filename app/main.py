@@ -262,12 +262,23 @@ async def video(pid,s,scene):
     vid=task.get("video_id") or task.get("id")
     if not vid:raise RuntimeError("Agnes 未返回 video_id")
     submit_key_idx=task.get("_agnes_key_index")
+    poll_interval=max(5,float(os.getenv("AGNES_VIDEO_POLL_INTERVAL","5")))
+    poll_backoff=max(10,float(os.getenv("AGNES_VIDEO_POLL_BACKOFF","10")))
     while True:
-        x=await agnes("GET",f"/agnesapi?video_id={vid}&model_name={model}",_key_index=submit_key_idx)
+        try:
+            x=await agnes("GET",f"/agnesapi?video_id={vid}&model_name={model}",_key_index=submit_key_idx)
+            poll_backoff=max(10,float(os.getenv("AGNES_VIDEO_POLL_BACKOFF","10")))
+        except RuntimeError as e:
+            msg=str(e).lower()
+            if "too many video status queries" in msg or "api 429" in msg:
+                await asyncio.sleep(poll_backoff)
+                poll_backoff=min(poll_backoff*1.5,30)
+                continue
+            raise
         status=str(x.get("status","")).lower()
         if status=="completed":break
         if status in {"failed","cancelled","error"}:raise RuntimeError("Agnes 视频任务失败: "+json.dumps(x,ensure_ascii=False))
-        await asyncio.sleep(2)
+        await asyncio.sleep(poll_interval)
     url=x.get("url") or x.get("video_url") or (x.get("data") or {}).get("url")
     if not url:raise RuntimeError("Agnes 没有返回视频地址")
     await download_url(url,out,timeout=900)
