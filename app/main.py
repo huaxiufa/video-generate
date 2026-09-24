@@ -73,8 +73,19 @@ async def agnes(method,path,**kw):
             AGNES_KEY_INDEX=(idx+1) % len(AGNES_KEYS)
             key=AGNES_KEYS[idx]
         tried.add(idx)
-        async with httpx.AsyncClient(timeout=300) as c:
-            r=await c.request(method,AGNES+path,headers={"Authorization":"Bearer "+key},**kw)
+        try:
+            request_timeout = 900 if (method.upper()=="POST" and path=="/v1/videos") else 300
+            async with httpx.AsyncClient(timeout=request_timeout) as c:
+                r=await c.request(method,AGNES+path,headers={"Authorization":"Bearer "+key},**kw)
+        except (httpx.ConnectError,httpx.ReadError,httpx.RemoteProtocolError,httpx.TimeoutException,httpx.NetworkError) as e:
+            last_error=RuntimeError(f"Agnes 网络连接异常: {e}")
+            # A disconnected POST may have been accepted by Agnes but its response
+            # was lost. Never blindly resubmit here; video() handles this case.
+            if method.upper()=="POST" and path=="/v1/videos":
+                AGNES_KEY_DISABLED[idx]=now+30
+                continue
+            AGNES_KEY_DISABLED[idx]=now+15
+            continue
         if r.is_success:
             return r.json()
         detail=r.text[:2000]
@@ -186,6 +197,8 @@ async def video(pid,s,scene):
         # Agnes may temporarily reject new jobs when its video queue is full.
         # Retry only this transient condition; never duplicate an accepted task.
         queue_retries=int(os.getenv("AGNES_VIDEO_QUEUE_RETRIES","8"))
+        network_retries=int(os.getenv("AGNES_VIDEO_NETWORK_RETRIES","6"))
+        last_error=None
         for attempt in range(1,queue_retries+1):
             try:
                 task=await agnes("POST","/v1/videos",json=body)
@@ -193,11 +206,26 @@ async def video(pid,s,scene):
                 break
             except RuntimeError as e:
                 msg=str(e)
+                last_error=e
+                if "Agnes 网络连接异常" in msg:
+                    if tf.exists():
+                        try:
+                            task=json.loads(tf.read_text(encoding="utf-8"))
+                            if task.get("video_id") or task.get("id"):
+                                break
+                        except Exception:
+                            pass
+                    if attempt>=network_retries:
+                        raise RuntimeError(f"Agnes 视频提交网络异常，已自动重试 {network_retries} 次：{msg}")
+                    await asyncio.sleep(min(5*attempt,30))
+                    continue
                 if "video_queue_full" not in msg and "queue is full" not in msg:
                     raise
                 if attempt>=queue_retries:
                     raise RuntimeError(f"Agnes 视频队列持续繁忙，已自动尝试 {queue_retries} 轮，最后错误：{msg}")
                 await asyncio.sleep(min(10*attempt,60))
+        else:
+            raise RuntimeError(f"Agnes 视频提交失败：{last_error}")
     vid=task.get("video_id") or task.get("id")
     if not vid:raise RuntimeError("Agnes 未返回 video_id")
     while True:
