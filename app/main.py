@@ -57,6 +57,40 @@ def data_uri(path):
     mime="image/png" if p.suffix.lower()==".png" else "image/jpeg"
     return "data:"+mime+";base64,"+base64.b64encode(p.read_bytes()).decode()
 
+
+
+async def download_url(url,out,timeout=900,retries=5):
+    """Download a remote asset safely; retry truncated HTTP bodies and resume with Range when supported."""
+    out=Path(out); out.parent.mkdir(parents=True,exist_ok=True)
+    part=out.with_suffix(out.suffix+".part")
+    last_error=None
+    for attempt in range(1,retries+1):
+        start=part.stat().st_size if part.exists() else 0
+        headers={"Range":f"bytes={start}-"} if start else {}
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout,connect=30)) as c:
+                async with c.stream("GET",url,headers=headers) as r:
+                    r.raise_for_status()
+                    mode="ab" if start and r.status_code==206 else "wb"
+                    if mode=="wb": start=0
+                    expected=r.headers.get("content-length")
+                    expected_total=(start+int(expected)) if expected and r.status_code==206 else (int(expected) if expected else None)
+                    with part.open(mode) as f:
+                        async for chunk in r.aiter_bytes(1024*1024):
+                            f.write(chunk)
+                    actual=part.stat().st_size
+                    if expected_total is not None and actual != expected_total:
+                        raise httpx.ReadError(f"incomplete download: received {actual} bytes, expected {expected_total}")
+            if part.stat().st_size<=1024:
+                raise RuntimeError("下载文件为空或过小")
+            part.replace(out)
+            return
+        except (httpx.HTTPError, OSError, RuntimeError) as e:
+            last_error=e
+            if attempt<retries:
+                await asyncio.sleep(min(2**attempt,8))
+    raise RuntimeError(f"远程文件下载失败（已重试{retries}次）: {last_error}")
+
 async def image(prompt,out,size="1024x576",references=None):
     out=Path(out)
     if out.exists() and out.stat().st_size>1024:return
@@ -67,8 +101,7 @@ async def image(prompt,out,size="1024x576",references=None):
     if item.get("b64_json"):out.write_bytes(base64.b64decode(item["b64_json"]));return
     url=item.get("url")
     if not url:raise RuntimeError("Agnes 图片返回异常")
-    async with httpx.AsyncClient(timeout=300) as c:
-        r=await c.get(url);r.raise_for_status();out.write_bytes(r.content)
+    await download_url(url,out,timeout=900)
 
 async def video(pid,s,scene):
     d=ROOT/pid;sd=d/"video"/str(scene["id"]);sd.mkdir(parents=True,exist_ok=True)
@@ -96,10 +129,7 @@ async def video(pid,s,scene):
         await asyncio.sleep(2)
     url=x.get("url") or x.get("video_url") or (x.get("data") or {}).get("url")
     if not url:raise RuntimeError("Agnes 没有返回视频地址")
-    part=out.with_suffix(".part")
-    async with httpx.AsyncClient(timeout=900) as c:
-        r=await c.get(url);r.raise_for_status();part.write_bytes(r.content)
-    part.replace(out)
+    await download_url(url,out,timeout=900)
 
 async def gemini_tts(text,out,voice):
     key=os.getenv("GEMINI_API_KEY")
