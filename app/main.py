@@ -64,7 +64,7 @@ def set_detail(pid,s,stage,index,total,label):
     s["stages"][stage]["progress"]=round(index/total*100,1) if total else 0
     save(pid,s)
 
-async def agnes(method,path,**kw):
+async def agnes(method,path,_key_index=None,_return_key_index=False,**kw):
     global AGNES_KEY_INDEX
     if not AGNES_KEYS: raise RuntimeError("AGNES_API_KEYS / AGNES_API_KEY 未配置")
     tried=set()
@@ -72,13 +72,19 @@ async def agnes(method,path,**kw):
     for _ in range(len(AGNES_KEYS)):
         now=asyncio.get_running_loop().time()
         async with AGNES_KEY_LOCK:
-            available=[i for i in range(len(AGNES_KEYS)) if i not in tried and AGNES_KEY_DISABLED.get(i,0) <= now]
+            if _key_index is not None:
+                available=[_key_index] if 0 <= _key_index < len(AGNES_KEYS) and _key_index not in tried else []
+            else:
+                available=[i for i in range(len(AGNES_KEYS)) if i not in tried and AGNES_KEY_DISABLED.get(i,0) <= now]
             if not available:
                 available=[i for i in range(len(AGNES_KEYS)) if i not in tried]
             if not available: break
-            start=AGNES_KEY_INDEX % len(AGNES_KEYS)
-            idx=next((i for i in range(start,start+len(AGNES_KEYS)) if i%len(AGNES_KEYS) in available),available[0]) % len(AGNES_KEYS)
-            AGNES_KEY_INDEX=(idx+1) % len(AGNES_KEYS)
+            if _key_index is not None:
+                idx=_key_index
+            else:
+                start=AGNES_KEY_INDEX % len(AGNES_KEYS)
+                idx=next((i for i in range(start,start+len(AGNES_KEYS)) if i%len(AGNES_KEYS) in available),available[0]) % len(AGNES_KEYS)
+                AGNES_KEY_INDEX=(idx+1) % len(AGNES_KEYS)
             key=AGNES_KEYS[idx]
         tried.add(idx)
         try:
@@ -96,7 +102,8 @@ async def agnes(method,path,**kw):
             continue
         if r.is_success:
             agnes_record(idx,path,status=r.status_code)
-            return r.json()
+            result=r.json()
+            return (result,idx) if _return_key_index else result
         detail=r.text[:2000]
         try:
             parsed=r.json(); err_obj=parsed.get("error",{}) if isinstance(parsed,dict) else {}
@@ -226,7 +233,8 @@ async def video(pid,s,scene):
         last_error=None
         for attempt in range(1,queue_retries+1):
             try:
-                task=await agnes("POST","/v1/videos",json=body)
+                task,submit_key_idx=await agnes("POST","/v1/videos",_return_key_index=True,json=body)
+                task["_agnes_key_index"]=submit_key_idx
                 tf.write_text(json.dumps(task,ensure_ascii=False,indent=2),encoding="utf-8")
                 break
             except RuntimeError as e:
@@ -253,8 +261,9 @@ async def video(pid,s,scene):
             raise RuntimeError(f"Agnes 视频提交失败：{last_error}")
     vid=task.get("video_id") or task.get("id")
     if not vid:raise RuntimeError("Agnes 未返回 video_id")
+    submit_key_idx=task.get("_agnes_key_index")
     while True:
-        x=await agnes("GET",f"/agnesapi?video_id={vid}&model_name={model}")
+        x=await agnes("GET",f"/agnesapi?video_id={vid}&model_name={model}",_key_index=submit_key_idx)
         status=str(x.get("status","")).lower()
         if status=="completed":break
         if status in {"failed","cancelled","error"}:raise RuntimeError("Agnes 视频任务失败: "+json.dumps(x,ensure_ascii=False))
