@@ -17,19 +17,17 @@ RUN pip install --no-cache-dir --default-timeout=600 -r /opt/agnes-base/requirem
 COPY patch_frontend.py /app/patch_frontend.py
 COPY patch_runtime.py /app/patch_runtime.py
 COPY scrub_upstream_ui.py /app/scrub_upstream_ui.py
-RUN python /app/patch_frontend.py \
- && python /app/patch_runtime.py \
- && echo '--- patched steps_video.py ---' \
- && sed -n '435,450p' /opt/agnes-base/core/pipelines/creative/steps_video.py \
- && python -m py_compile /opt/agnes-base/core/pipelines/creative/steps_video.py \
- && cd /opt/agnes-base/frontend \
- && npm install --no-audit --no-fund \
- && npm run build \
- && python /app/scrub_upstream_ui.py \
- && cp /app/night-agency-ui.js /opt/agnes-base/static/night-agency-ui.js \
- && printf "\n<!-- night-agency-static-v4 -->\n" >> /opt/agnes-base/static/index.html \
- && sed -i 's#</head>#<link rel="stylesheet" href="/static/night-agency-cleanup.css"></head>#' /opt/agnes-base/static/index.html \
- && sed -i 's#</body>#<script src="/static/night-agency-ui.js"></script></body>#' /opt/agnes-base/static/index.html
+RUN python /app/patch_frontend.py
+RUN python /app/patch_runtime.py
+RUN echo '--- patched steps_video.py ---' && sed -n '435,450p' /opt/agnes-base/core/pipelines/creative/steps_video.py
+RUN python -m py_compile /opt/agnes-base/core/pipelines/creative/steps_video.py
+RUN cd /opt/agnes-base/frontend && npm install --no-audit --no-fund
+RUN cd /opt/agnes-base/frontend && npm run build
+RUN python /app/scrub_upstream_ui.py
+RUN cp /app/night-agency-ui.js /opt/agnes-base/static/night-agency-ui.js
+RUN printf "\n<!-- night-agency-static-v4 -->\n" >> /opt/agnes-base/static/index.html
+RUN sed -i 's#</head>#<link rel="stylesheet" href="/static/night-agency-cleanup.css"></head>#' /opt/agnes-base/static/index.html
+RUN sed -i 's#</body>#<script src="/static/night-agency-ui.js"></script></body>#' /opt/agnes-base/static/index.html
 ENV PYTHONPATH=/app:/opt/agnes-base
 ENV NA_VOICE_DIR=/app/agnes_data/voices
 WORKDIR /opt/agnes-base
