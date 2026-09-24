@@ -208,8 +208,17 @@ async def run(pid):
                 merged=d/"merged.mp4";subprocess.run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(lst),"-c","copy",str(merged)],check=True)
                 wavs=sorted((d/"audio").glob("*.wav"))
                 if wavs:
-                    al=d/"audio_concat.txt";al.write_text("".join("file '"+p.resolve().as_posix()+"'\\n" for p in wavs),encoding="utf-8")
-                    mix=d/"mix.wav";subprocess.run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(al),"-c:a","pcm_s16le",str(mix)],check=True)
+                    # Preserve scene/dialogue timing instead of simply concatenating speech.
+                    inputs=[];filters=[]
+                    for idx,p in enumerate(wavs):
+                        q=next((z for z in s.get("subtitles",[]) if str(z.get("text","")).split(": ",1)[-1] and p.stem in {f"{sc['id']}_{j}" for sc in s["scenes"] for j,_ in enumerate(sc.get("dialogues",[]))}),None)
+                        delay=int(max(0,float(q["start"]))*1000) if q else 0
+                        inputs += ["-i",str(p)]
+                        filters.append(f"[{idx}:a]adelay={delay}|{delay}[a{idx}]")
+                    labels="".join(f"[a{i}]" for i in range(len(wavs)))
+                    filters.append(labels+f"amix=inputs={len(wavs)}:duration=longest:normalize=0[mix]")
+                    mix=d/"mix.wav"
+                    subprocess.run(["ffmpeg","-y",*inputs,"-filter_complex",";".join(filters),"-map","[mix]","-c:a","pcm_s16le",str(mix)],check=True)
                 cmd=["ffmpeg","-y","-i",str(merged)]
                 if (d/"mix.wav").exists():cmd+=["-i",str(d/"mix.wav")]
                 if (d/"subtitles.srt").exists():
