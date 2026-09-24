@@ -9,10 +9,25 @@ ROOT=Path(os.getenv("WORK_DIR","/data/projects")); ROOT.mkdir(parents=True,exist
 STAGES=["初始化","场景配置","图片分析","故事生成","角色参考图","脚本编写","尾帧提示词","尾帧生成","视频生成","音频生成","字幕生成","视频拼接"]
 AGNES=os.getenv("AGNES_BASE_URL","https://apihub.agnes-ai.com").rstrip("/")
 TEXT_MODEL=os.getenv("AGNES_TEXT_MODEL","agnes-3.0-flash")
-AGNES_KEYS=[x.strip() for x in os.getenv("AGNES_API_KEYS","").replace("\\r","").splitlines() if x.strip()]
-if not AGNES_KEYS:
+def load_agnes_keys():
+    # Prefer explicit numbered variables because Docker Compose .env does not
+    # reliably support multiline values. Example: AGNES_API_KEY_1, _2, _3...
+    numbered=[]
+    for name,value in os.environ.items():
+        if name.startswith("AGNES_API_KEY_"):
+            suffix=name[len("AGNES_API_KEY_"):]
+            if suffix.isdigit() and value.strip():
+                numbered.append((int(suffix),value.strip()))
+    keys=[value for _,value in sorted(numbered)]
+    if keys:
+        return keys
+    multiline=[x.strip() for x in os.getenv("AGNES_API_KEYS","").replace("\\r","").splitlines() if x.strip()]
+    if multiline:
+        return multiline
     single=os.getenv("AGNES_API_KEY","").strip()
-    if single: AGNES_KEYS=[single]
+    return [single] if single else []
+
+AGNES_KEYS=load_agnes_keys()
 AGNES_KEY_INDEX=0
 AGNES_KEY_LOCK=asyncio.Lock()
 AGNES_KEY_DISABLED={}
