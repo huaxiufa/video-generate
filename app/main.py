@@ -240,7 +240,7 @@ async def video(pid,s,scene):
         # are injected into generated frames instead of images[].
         # Agnes may temporarily reject new jobs when its video queue is full.
         # Retry only this transient condition; never duplicate an accepted task.
-        queue_retries=int(os.getenv("AGNES_VIDEO_QUEUE_RETRIES","8"))
+        queue_retries=int(os.getenv("AGNES_VIDEO_QUEUE_RETRIES","20"))
         network_retries=int(os.getenv("AGNES_VIDEO_NETWORK_RETRIES","6"))
         last_error=None
         for attempt in range(1,queue_retries+1):
@@ -268,7 +268,7 @@ async def video(pid,s,scene):
                     raise
                 if attempt>=queue_retries:
                     raise RuntimeError(f"Agnes 视频队列持续繁忙，已自动尝试 {queue_retries} 轮，最后错误：{msg}")
-                await asyncio.sleep(min(10*attempt,60))
+                # Queue-full is service-side capacity, not a key problem.\n                # Use a long backoff so we do not hammer the overloaded scheduler.\n                await asyncio.sleep(min(30 * attempt,180))
         else:
             raise RuntimeError(f"Agnes 视频提交失败：{last_error}")
     vid=task.get("video_id") or task.get("id")
