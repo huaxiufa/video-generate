@@ -19,6 +19,9 @@ COPY patch_runtime.py /app/patch_runtime.py
 COPY scrub_upstream_ui.py /app/scrub_upstream_ui.py
 RUN python /app/patch_frontend.py \
  && python /app/patch_runtime.py \
+ && echo '--- patched steps_video.py ---' \
+ && sed -n '435,450p' /opt/agnes-base/core/pipelines/creative/steps_video.py \
+ && python -m py_compile /opt/agnes-base/core/pipelines/creative/steps_video.py \
  && cd /opt/agnes-base/frontend \
  && npm install --no-audit --no-fund \
  && npm run build \
