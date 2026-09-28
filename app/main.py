@@ -273,10 +273,15 @@ async def video(pid,s,scene):
             last_url=video_input_image(scene.get("last_frame_path","")) if scene.get("last_frame_path") else None
 
             if first_url and last_url:
+                # Agnes v2.0's current gateway validates \`mode\` against its
+                # legacy values: ti2vid / keyframes / multi_reference.
+                # Keep mode and image at the top level; sending the 2.5-style
+                # extra_body.mode causes LiteLLM to reject the request.
                 body={
                     "model":"agnes-video-v2.0",
                     "prompt":scene["video_prompt"],
-                    "extra_body":{"image":[first_url,last_url],"mode":"keyframes"},
+                    "mode":"keyframes",
+                    "image":[first_url,last_url],
                     "width":width,"height":height,"num_frames":num_frames,"frame_rate":frame_rate,
                 }
                 generation_mode="v2.0-keyframes"
@@ -284,6 +289,7 @@ async def video(pid,s,scene):
                 body={
                     "model":"agnes-video-v2.0",
                     "prompt":scene["video_prompt"],
+                    "mode":"ti2vid",
                     "image":first_url,
                     "width":width,"height":height,"num_frames":num_frames,"frame_rate":frame_rate,
                 }
@@ -292,6 +298,7 @@ async def video(pid,s,scene):
                 body={
                     "model":"agnes-video-v2.0",
                     "prompt":scene["video_prompt"],
+                    "mode":"ti2vid",
                     "width":width,"height":height,"num_frames":num_frames,"frame_rate":frame_rate,
                 }
                 generation_mode="v2.0-text2video"
