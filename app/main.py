@@ -486,7 +486,38 @@ async def run(pid):
                 vids=sorted((d/"video").glob("*/video.mp4"),key=lambda p:int(p.parent.name))
                 if not vids:raise RuntimeError("没有视频片段")
                 lst=d/"concat.txt";lst.write_text("".join("file '"+p.resolve().as_posix()+"'\\n" for p in vids),encoding="utf-8")
-                merged=d/"merged.mp4";subprocess.run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(lst),"-c","copy",str(merged)],check=True)
+                merged=d/"merged.mp4"
+                concat_copy=["ffmpeg","-y","-f","concat","-safe","0","-i",str(lst),"-c","copy",str(merged)]
+                try:
+                    subprocess.run(concat_copy,check=True)
+                except subprocess.CalledProcessError:
+                    # Stream-copy concat requires identical codecs/time bases/stream layouts.
+                    # Agnes clips can legitimately differ, so fall back to filter concat.
+                    probe=subprocess.run(
+                        ["ffprobe","-v","error","-select_streams","v:0",
+                         "-show_entries","stream=width,height","-of","csv=s=x:p=0",str(vids[0])],
+                        capture_output=True,text=True,check=True
+                    )
+                    size=probe.stdout.strip()
+                    if "x" not in size:
+                        raise RuntimeError("无法读取视频片段尺寸")
+                    width,height=[int(v) for v in size.split("x",1)]
+                    inputs=[];filters=[]
+                    for idx,p in enumerate(vids):
+                        inputs += ["-i",str(p)]
+                        filters.append(
+                            f"[{idx}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
+                            f"fps=30,format=yuv420p,setpts=PTS-STARTPTS[v{idx}]"
+                        )
+                    labels="".join(f"[v{i}]" for i in range(len(vids)))
+                    filters.append(labels+f"concat=n={len(vids)}:v=1:a=0[vout]")
+                    subprocess.run(
+                        ["ffmpeg","-y",*inputs,"-filter_complex",";".join(filters),
+                         "-map","[vout]","-c:v","libx264","-preset","veryfast","-pix_fmt","yuv420p",
+                         "-movflags","+faststart",str(merged)],
+                        check=True
+                    )
                 wavs=sorted((d/"audio").glob("*.wav"))
                 if wavs:
                     # Preserve scene/dialogue timing instead of simply concatenating speech.
