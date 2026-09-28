@@ -398,13 +398,20 @@ async def build_character_intro(d,s):
     width,height=[int(v) for v in probe.stdout.strip().split("x",1)]
     vf=(f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2")
+    # Open all inputs before output options. FFmpeg applies options to the
+    # next input/output; the old ordering could make the lavfi audio input
+    # inherit video output options and exit with status 234.
     await run_process([
-        "ffmpeg","-y","-loop","1","-i",str(intro_image),
-        "-t",str(segment_seconds),"-vf",vf,"-r","30",
-        "-c:v","libx264","-pix_fmt","yuv420p",
+        "ffmpeg","-y",
+        "-loop","1","-framerate","30","-i",str(intro_image),
         "-f","lavfi","-i","anullsrc=r=48000:cl=stereo",
-        "-t",str(segment_seconds),"-c:a","aac","-shortest",
-        "-movflags","+faststart",str(intro)
+        "-map","0:v:0","-map","1:a:0",
+        "-t",str(segment_seconds),
+        "-vf",vf,
+        "-r","30",
+        "-c:v","libx264","-preset","veryfast","-pix_fmt","yuv420p",
+        "-c:a","aac","-ar","48000","-ac","2",
+        "-shortest","-movflags","+faststart",str(intro)
     ],check=True)
     return segment_seconds
 
@@ -553,37 +560,39 @@ async def run(pid):
                 if not vids:raise RuntimeError("没有视频片段")
                 lst=d/"concat.txt";lst.write_text("".join("file '"+p.resolve().as_posix()+"'\\n" for p in vids),encoding="utf-8")
                 merged=d/"merged.mp4"
-                concat_copy=["ffmpeg","-y","-f","concat","-safe","0","-i",str(lst),"-c","copy",str(merged)]
-                try:
-                    await run_process(concat_copy,check=True)
-                except subprocess.CalledProcessError:
-                    # Stream-copy concat requires identical codecs/time bases/stream layouts.
-                    # Agnes clips can legitimately differ, so fall back to filter concat.
-                    probe=await run_process(
-                        ["ffprobe","-v","error","-select_streams","v:0",
-                         "-show_entries","stream=width,height","-of","csv=s=x:p=0",str(vids[0])],
-                        capture_output=True,text=True,check=True
-                    )
-                    size=probe.stdout.strip()
-                    if "x" not in size:
-                        raise RuntimeError("无法读取视频片段尺寸")
-                    width,height=[int(v) for v in size.split("x",1)]
-                    inputs=[];filters=[]
-                    for idx,p in enumerate(vids):
-                        inputs += ["-i",str(p)]
-                        filters.append(
-                            f"[{idx}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
-                            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
-                            f"fps=30,format=yuv420p,setpts=PTS-STARTPTS[v{idx}]"
+                # On audio-only regeneration, reuse the existing merged body.
+                if not (merged.exists() and merged.stat().st_size > 1024):
+                    concat_copy=["ffmpeg","-y","-f","concat","-safe","0","-i",str(lst),"-c","copy",str(merged)]
+                    try:
+                        await run_process(concat_copy,check=True)
+                        except subprocess.CalledProcessError:
+                        # Stream-copy concat requires identical codecs/time bases/stream layouts.
+                        # Agnes clips can legitimately differ, so fall back to filter concat.
+                        probe=await run_process(
+                            ["ffprobe","-v","error","-select_streams","v:0",
+                             "-show_entries","stream=width,height","-of","csv=s=x:p=0",str(vids[0])],
+                            capture_output=True,text=True,check=True
                         )
-                    labels="".join(f"[v{i}]" for i in range(len(vids)))
-                    filters.append(labels+f"concat=n={len(vids)}:v=1:a=0[vout]")
-                    await run_process(
-                        ["ffmpeg","-y",*inputs,"-filter_complex",";".join(filters),
-                         "-map","[vout]","-c:v","libx264","-preset","veryfast","-profile:v","high","-level:v","4.2","-r","30","-fps_mode","cfr","-pix_fmt","yuv420p","-video_track_timescale","90000",
-                         "-movflags","+faststart",str(merged)],
-                        check=True
-                    )
+                        size=probe.stdout.strip()
+                        if "x" not in size:
+                            raise RuntimeError("无法读取视频片段尺寸")
+                        width,height=[int(v) for v in size.split("x",1)]
+                        inputs=[];filters=[]
+                        for idx,p in enumerate(vids):
+                            inputs += ["-i",str(p)]
+                            filters.append(
+                                f"[{idx}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
+                                f"fps=30,format=yuv420p,setpts=PTS-STARTPTS[v{idx}]"
+                            )
+                        labels="".join(f"[v{i}]" for i in range(len(vids)))
+                        filters.append(labels+f"concat=n={len(vids)}:v=1:a=0[vout]")
+                        await run_process(
+                            ["ffmpeg","-y",*inputs,"-filter_complex",";".join(filters),
+                             "-map","[vout]","-c:v","libx264","-preset","veryfast","-profile:v","high","-level:v","4.2","-r","30","-fps_mode","cfr","-pix_fmt","yuv420p","-video_track_timescale","90000",
+                             "-movflags","+faststart",str(merged)],
+                            check=True
+                        )
                 intro_seconds=await build_character_intro(d,s)
                 wavs=sorted((d/"audio").glob("*.wav"))
                 if wavs:
@@ -654,9 +663,12 @@ async def start(pid:str):
         s["stages"][stage]={"status":"pending","progress":0}
     d=ROOT/pid
     (d/"audio").mkdir(exist_ok=True)
+    # Keep merged.mp4 during audio-only regeneration. Agnes video clips and
+    # the already-concatenated video body are reusable; rebuild only derived
+    # audio/subtitle/final packaging files.
     for p in list((d/"audio").glob("*.wav")) + [
         d/"subtitles.json",d/"subtitles.srt",d/"subtitles_final.srt",
-        d/"mix.wav",d/"merged.mp4",d/"final.mp4",d/"final_body.mp4",
+        d/"mix.wav",d/"final.mp4",d/"final_body.mp4",
         d/"character_intro.mp4"
     ]:
         try:
