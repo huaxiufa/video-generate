@@ -366,7 +366,8 @@ async def build_character_intro(d,s):
     if not chars:
         return 0.0
     segment_seconds=2.5
-    width,height=1280,720
+    probe=await run_process(["ffprobe","-v","error","-select_streams","v:0","-show_entries","stream=width,height","-of","csv=s=x:p=0",str(d/"merged.mp4")],capture_output=True,text=True,check=True)
+    width,height=[int(v) for v in probe.stdout.strip().split("x",1)]
     parts=[]
     for idx,c in enumerate(chars):
         out=d/"characters"/f"_intro_{idx}.mp4"
@@ -379,7 +380,9 @@ async def build_character_intro(d,s):
                 f"drawtext=fontfile=/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc:"
                 f"text='{name}':fontcolor=white:fontsize=64:x=(w-text_w)/2:y=52")
             await run_process(["ffmpeg","-y","-loop","1","-i",str(img),"-t",str(segment_seconds),
-                "-vf",vf,"-r","30","-c:v","libx264","-pix_fmt","yuv420p","-an",
+                "-vf",vf,"-r","30","-c:v","libx264","-pix_fmt","yuv420p",
+                "-f","lavfi","-i","anullsrc=r=48000:cl=stereo",
+                "-t",str(segment_seconds),"-c:a","aac","-shortest",
                 "-movflags","+faststart",str(out)],check=True)
         parts.append(out)
     lst=d/"character_intro_concat.txt"
@@ -599,7 +602,13 @@ async def run(pid):
                     await run_process(cmd,check=True)
                     intro_list=d/"final_video_concat.txt"
                     intro_list.write_text("file '"+(d/"character_intro.mp4").resolve().as_posix()+"'\nfile '"+body.resolve().as_posix()+"'\n",encoding="utf-8")
-                    await run_process(["ffmpeg","-y","-f","concat","-safe","0","-i",str(intro_list),"-c","copy","-movflags","+faststart",str(d/"final.mp4")],check=True)
+                    await run_process([
+                        "ffmpeg","-y","-i",str(d/"character_intro.mp4"),"-i",str(body),
+                        "-filter_complex",
+                        "[0:v]setpts=PTS-STARTPTS[v0];[1:v]setpts=PTS-STARTPTS[v1];[0:a]aresample=48000,asetpts=PTS-STARTPTS[a0];[1:a]aresample=48000,asetpts=PTS-STARTPTS[a1];[v0][v1]concat=n=2:v=1:a=0[v];[a0][a1]concat=n=2:v=0:a=1[a]",
+                        "-map","[v]","-map","[a]","-c:v","libx264","-preset","veryfast","-pix_fmt","yuv420p",
+                        "-c:a","aac","-movflags","+faststart",str(d/"final.mp4")
+                    ],check=True)
                 else:
                     cmd.append(str(d/"final.mp4"))
                     await run_process(cmd,check=True)
