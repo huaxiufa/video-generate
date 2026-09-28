@@ -376,8 +376,16 @@ async def clone_tts(text,sample,out):
     out=Path(out)
     if out.exists() and out.stat().st_size>1024:return
     script=os.getenv("MOSS_TTS_SCRIPT","/app/app/moss_clone.py")
-    p=await asyncio.create_subprocess_exec("python",script,text,str(sample),str(out))
-    if await p.wait():raise RuntimeError("MOSS-TTS-Nano voice clone 失败")
+    p=await asyncio.create_subprocess_exec(
+        "python",script,text,str(sample),str(out),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout,stderr=await p.communicate()
+    if p.returncode:
+        detail=(stderr or stdout).decode("utf-8","replace").strip()
+        if len(detail)>3000: detail=detail[-3000:]
+        raise RuntimeError("MOSS-TTS-Nano voice clone 失败: "+(detail or "unknown error"))
 
 async def run(pid):
     s=load(pid);d=ROOT/pid
