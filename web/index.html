@@ -16,8 +16,8 @@ textarea,input,select,button{width:100%;box-sizing:border-box;margin:8px 0;paddi
 <textarea id="script" rows="12" placeholder="输入完整故事脚本"></textarea>
 <select id="ratio"><option>16:9</option><option>9:16</option><option>1:1</option></select>
 <select id="size"><option>1080P</option><option>720P</option><option>2K</option></select>
-<button onclick="start()">开始生成</button>
-<input id="pid" placeholder="项目 ID"><button onclick="resume()">继续生成</button>
+<button id="startBtn" type="button" onclick="start()">开始生成</button>
+<input id="pid" placeholder="项目 ID"><button id="resumeBtn" type="button" onclick="resume()">继续生成</button>
 <div id="status"></div>
 <div id="errorBox" class="error-box" style="display:none"></div>
 <div class="progress-wrap">
@@ -35,6 +35,9 @@ async function start(){
 }
 async function resume(){
   const projectId=pid.value.trim();
+  const btn=document.getElementById("resumeBtn");
+  btn.disabled=true;
+  btn.textContent="正在继续…";
   if(!projectId){
     errorBox.style.display="block";
     errorBox.textContent="请先输入项目 ID";
@@ -58,13 +61,16 @@ async function resume(){
     clearInterval(timer);
     errorBox.style.display="block";
     errorBox.textContent="继续生成失败：\n"+(e?.message||e);
+  }finally{
+    btn.disabled=false;
+    btn.textContent="继续生成";
   }
 }
 function escapeHtml(v){
   return String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 }
 async function poll(){
-  let s=await fetch("/api/projects/"+pid.value).then(r=>r.json());
+  let s=await fetch("/api/projects/"+encodeURIComponent(pid.value.trim())+"?t="+Date.now(),{cache:"no-store"}).then(r=>r.json());
   let pct=Number(s.progress_percent||0);
   bar.style.width=pct+"%";
   progressText.textContent="总体进度 "+pct.toFixed(1)+"%";
