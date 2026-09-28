@@ -360,35 +360,53 @@ async def video(pid,s,scene):
     await download_url(url,out,timeout=900)
 
 async def build_character_intro(d,s):
-    """Create a short opening slate showing each character reference image and Chinese name."""
+    """Create one opening character-intro image and show it briefly before the video."""
     chars=[c for c in s.get("characters",[]) if c.get("path") and Path(c["path"]).exists() and c.get("name")]
     intro=d/"character_intro.mp4"
     if not chars:
         return 0.0
-    segment_seconds=2.5
-    probe=await run_process(["ffprobe","-v","error","-select_streams","v:0","-show_entries","stream=width,height","-of","csv=s=x:p=0",str(d/"merged.mp4")],capture_output=True,text=True,check=True)
-    width,height=[int(v) for v in probe.stdout.strip().split("x",1)]
-    parts=[]
-    for idx,c in enumerate(chars):
-        out=d/"characters"/f"_intro_{idx}.mp4"
-        name=str(c["name"]).replace("'","\\'")
-        img=Path(c["path"])
-        if not out.exists() or out.stat().st_size<1024:
-            vf=(f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
-                f"drawbox=x=0:y=0:w=iw:h=170:color=black@0.58:t=fill,"
+    segment_seconds=3.0
+    # Reuse one generated composite image for the whole character introduction.
+    # This avoids generating/concatenating one intro clip per character.
+    intro_image=d/"characters"/"character_intro.png"
+    if not intro_image.exists() or intro_image.stat().st_size<1024:
+        inputs=[]
+        for c in chars:
+            inputs += ["-i",str(c["path"])]
+        # Build a simple horizontal character lineup from the existing reference images.
+        # Names are rendered on the final intro frame by drawtext.
+        filters=[]
+        for idx,c in enumerate(chars):
+            name=str(c["name"]).replace("'","\\'")
+            filters.append(
+                f"[{idx}:v]scale=480:480:force_original_aspect_ratio=decrease,"
+                f"pad=480:560:(ow-iw)/2:20:color=black,"
                 f"drawtext=fontfile=/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc:"
-                f"text='{name}':fontcolor=white:fontsize=64:x=(w-text_w)/2:y=52")
-            await run_process(["ffmpeg","-y","-loop","1","-i",str(img),"-t",str(segment_seconds),
-                "-vf",vf,"-r","30","-c:v","libx264","-pix_fmt","yuv420p",
-                "-f","lavfi","-i","anullsrc=r=48000:cl=stereo",
-                "-t",str(segment_seconds),"-c:a","aac","-shortest",
-                "-movflags","+faststart",str(out)],check=True)
-        parts.append(out)
-    lst=d/"character_intro_concat.txt"
-    lst.write_text("".join("file '"+p.resolve().as_posix()+"'\n" for p in parts),encoding="utf-8")
-    await run_process(["ffmpeg","-y","-f","concat","-safe","0","-i",str(lst),"-c","copy","-movflags","+faststart",str(intro)],check=True)
-    return segment_seconds*len(parts)
+                f"text='{name}':fontcolor=white:fontsize=42:x=(w-text_w)/2:y=500[v{idx}]"
+            )
+        labels="".join(f"[v{i}]" for i in range(len(chars)))
+        filters.append(labels+f"hstack=inputs={len(chars)}[out]")
+        await run_process([
+            "ffmpeg","-y",*inputs,"-filter_complex",";".join(filters),
+            "-frames:v","1","-map","[out]","-q:v","2",str(intro_image)
+        ],check=True)
+    probe=await run_process([
+        "ffprobe","-v","error","-select_streams","v:0",
+        "-show_entries","stream=width,height","-of","csv=s=x:p=0",
+        str(d/"merged.mp4")
+    ],capture_output=True,text=True,check=True)
+    width,height=[int(v) for v in probe.stdout.strip().split("x",1)]
+    vf=(f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2")
+    await run_process([
+        "ffmpeg","-y","-loop","1","-i",str(intro_image),
+        "-t",str(segment_seconds),"-vf",vf,"-r","30",
+        "-c:v","libx264","-pix_fmt","yuv420p",
+        "-f","lavfi","-i","anullsrc=r=48000:cl=stereo",
+        "-t",str(segment_seconds),"-c:a","aac","-shortest",
+        "-movflags","+faststart",str(intro)
+    ],check=True)
+    return segment_seconds
 
 async def run_process(args, **kwargs):
     """Run blocking subprocess work off the FastAPI event loop so status polling stays responsive."""
@@ -630,18 +648,16 @@ async def start(pid:str):
     s=load(pid)
     if not s:raise HTTPException(404,"project not found")
     if pid in RUNNING:return {"ok":True,"project_id":pid,"already_running":True}
-    # “继续生成 / 重新生成”从脚本编写开始重新生成下游内容。
-    # 无论项目之前是 done 还是 failed，都不要直接跳到旧的音频/字幕状态。
-    # 视频片段保留并复用（避免无意义地再次消耗 Agnes），但对白音频和最终成品必须清掉。
-    for stage in STAGES[5:]:
+    # 重新生成时只重做音频、字幕和最终封装；场景、尾帧、Agnes 视频全部复用。
+    # 这样修改对白/语言时不会再次消耗 Agnes 视频额度。
+    for stage in STAGES[9:]:
         s["stages"][stage]={"status":"pending","progress":0}
     d=ROOT/pid
     (d/"audio").mkdir(exist_ok=True)
     for p in list((d/"audio").glob("*.wav")) + [
         d/"subtitles.json",d/"subtitles.srt",d/"subtitles_final.srt",
         d/"mix.wav",d/"merged.mp4",d/"final.mp4",d/"final_body.mp4",
-        d/"character_intro.mp4",d/"character_intro_concat.txt",
-        d/"final_video_concat.txt"
+        d/"character_intro.mp4"
     ]:
         try:
             p.unlink()
@@ -649,9 +665,9 @@ async def start(pid:str):
             pass
     s["status"]="pending"
     s["error"]=None
-    s["current_stage"]=5
-    s["current_stage_name"]="脚本编写"
-    s["progress_percent"]=round(5/len(STAGES)*100,1)
+    s["current_stage"]=9
+    s["current_stage_name"]="音频生成"
+    s["progress_percent"]=round(9/len(STAGES)*100,1)
     s["current_item"]=0
     s["total_items"]=0
     s["current_detail"]="准备重新生成"
