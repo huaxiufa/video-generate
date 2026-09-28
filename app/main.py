@@ -208,6 +208,32 @@ async def download_url(url,out,timeout=900,retries=5):
                 await asyncio.sleep(min(2**attempt,8))
     raise RuntimeError(f"远程文件下载失败（已重试{retries}次）: {last_error}")
 
+def agnes_video_dimensions(aspect_ratio):
+    sizes={
+        "16:9":(1152,648),
+        "9:16":(648,1152),
+        "1:1":(768,768),
+        "4:3":(1024,768),
+        "3:4":(768,1024),
+        "21:9":(1152,494),
+    }
+    return sizes.get(aspect_ratio,(1152,648))
+
+def agnes_v20_frames(seconds,fps=24):
+    target=max(4,min(12,int(seconds)))
+    raw=target*fps
+    frames=8*round((raw-1)/8)+1
+    return max(33,min(441,frames)),fps
+
+def video_input_image(path):
+    p=Path(path)
+    sidecar=p.with_suffix(p.suffix+".url")
+    if sidecar.exists():
+        url=sidecar.read_text(encoding="utf-8").strip()
+        if url.startswith(("http://","https://")):
+            return url
+    return None
+
 async def image(prompt,out,size="1024x576",references=None):
     out=Path(out)
     if out.exists() and out.stat().st_size>1024:return
@@ -219,27 +245,63 @@ async def image(prompt,out,size="1024x576",references=None):
     url=item.get("url")
     if not url:raise RuntimeError("Agnes 图片返回异常")
     await download_url(url,out,timeout=900)
+    try:
+        out.with_suffix(out.suffix+".url").write_text(url,encoding="utf-8")
+    except OSError:
+        pass
 
 async def video(pid,s,scene):
     d=ROOT/pid;sd=d/"video"/str(scene["id"]);sd.mkdir(parents=True,exist_ok=True)
     out=sd/"video.mp4";tf=sd/"task.json"
     if out.exists() and out.stat().st_size>1024:return
-    model=os.getenv("AGNES_VIDEO_MODEL","agnes-video-2.5-flash")
+
+    configured_model=os.getenv("AGNES_VIDEO_MODEL","agnes-video-2.5-flash").strip()
+    allowed_models={"agnes-video-2.5-flash","agnes-video-2.5","agnes-video-v2.0"}
+    if configured_model not in allowed_models:
+        raise RuntimeError("AGNES_VIDEO_MODEL 不支持: "+configured_model+"；可选：agnes-video-2.5-flash、agnes-video-2.5、agnes-video-v2.0")
+
     task=json.loads(tf.read_text(encoding="utf-8")) if tf.exists() else None
+    model=(task.get("_agnes_model") if task else None) or configured_model
+
     if not task:
-        # Video 2.5 Flash only accepts 720P and seconds 4-12.
-        size="720P" if model=="agnes-video-2.5-flash" else s["size"]
         seconds=max(4,min(12,int(scene["seconds"])))
-        body={"model":model,"mode":"keyframe",
-              "prompt":scene["video_prompt"],"seconds":str(seconds),"size":size,
-              "aspect_ratio":s["aspect_ratio"],"n":1}
-        if scene.get("first_frame_path"):body["first_frame"]=data_uri(scene["first_frame_path"])
-        if scene.get("last_frame_path"):body["last_frame"]=data_uri(scene["last_frame_path"])
-        refs=[x["path"] for x in s.get("characters",[]) if x.get("path") and Path(x["path"]).exists()]
-        # Agnes 2.5 keyframe mode accepts first/last frames; character references
-        # are injected into generated frames instead of images[].
-        # Agnes may temporarily reject new jobs when its video queue is full.
-        # Retry only this transient condition; never duplicate an accepted task.
+
+        if model=="agnes-video-v2.0":
+            width,height=agnes_video_dimensions(s["aspect_ratio"])
+            num_frames,frame_rate=agnes_v20_frames(seconds)
+            first_url=video_input_image(scene.get("first_frame_path","")) if scene.get("first_frame_path") else None
+            last_url=video_input_image(scene.get("last_frame_path","")) if scene.get("last_frame_path") else None
+
+            if first_url and last_url:
+                body={
+                    "model":"agnes-video-v2.0",
+                    "prompt":scene["video_prompt"],
+                    "extra_body":{"image":[first_url,last_url],"mode":"keyframes"},
+                    "width":width,"height":height,"num_frames":num_frames,"frame_rate":frame_rate,
+                }
+                generation_mode="v2.0-keyframes"
+            elif first_url:
+                body={
+                    "model":"agnes-video-v2.0",
+                    "prompt":scene["video_prompt"],
+                    "image":first_url,
+                    "width":width,"height":height,"num_frames":num_frames,"frame_rate":frame_rate,
+                }
+                generation_mode="v2.0-img2video"
+            else:
+                body={
+                    "model":"agnes-video-v2.0",
+                    "prompt":scene["video_prompt"],
+                    "width":width,"height":height,"num_frames":num_frames,"frame_rate":frame_rate,
+                }
+                generation_mode="v2.0-text2video"
+        else:
+            size="720P" if model=="agnes-video-2.5-flash" else s["size"]
+            body={"model":model,"mode":"keyframe","prompt":scene["video_prompt"],"seconds":str(seconds),"size":size,"aspect_ratio":s["aspect_ratio"],"n":1}
+            if scene.get("first_frame_path"):body["first_frame"]=data_uri(scene["first_frame_path"])
+            if scene.get("last_frame_path"):body["last_frame"]=data_uri(scene["last_frame_path"])
+            generation_mode="2.5-keyframe"
+
         queue_retries=int(os.getenv("AGNES_VIDEO_QUEUE_RETRIES","20"))
         network_retries=int(os.getenv("AGNES_VIDEO_NETWORK_RETRIES","6"))
         last_error=None
@@ -247,6 +309,8 @@ async def video(pid,s,scene):
             try:
                 task,submit_key_idx=await agnes("POST","/v1/videos",_return_key_index=True,json=body)
                 task["_agnes_key_index"]=submit_key_idx
+                task["_agnes_model"]=model
+                task["_agnes_generation_mode"]=generation_mode
                 tf.write_text(json.dumps(task,ensure_ascii=False,indent=2),encoding="utf-8")
                 break
             except RuntimeError as e:
@@ -256,21 +320,19 @@ async def video(pid,s,scene):
                     if tf.exists():
                         try:
                             task=json.loads(tf.read_text(encoding="utf-8"))
-                            if task.get("video_id") or task.get("id"):
-                                break
-                        except Exception:
-                            pass
+                            if task.get("video_id") or task.get("id"): break
+                        except Exception: pass
                     if attempt>=network_retries:
                         raise RuntimeError(f"Agnes 视频提交网络异常，已自动重试 {network_retries} 次：{msg}")
                     await asyncio.sleep(min(5*attempt,30))
                     continue
-                if "video_queue_full" not in msg and "queue is full" not in msg:
-                    raise
+                if "video_queue_full" not in msg and "queue is full" not in msg: raise
                 if attempt>=queue_retries:
                     raise RuntimeError(f"Agnes 视频队列持续繁忙，已自动尝试 {queue_retries} 轮，最后错误：{msg}")
-                # Queue-full is service-side capacity, not a key problem.\n                # Use a long backoff so we do not hammer the overloaded scheduler.\n                await asyncio.sleep(min(30 * attempt,180))
+                await asyncio.sleep(min(30*attempt,180))
         else:
             raise RuntimeError(f"Agnes 视频提交失败：{last_error}")
+
     vid=task.get("video_id") or task.get("id")
     if not vid:raise RuntimeError("Agnes 未返回 video_id")
     submit_key_idx=task.get("_agnes_key_index")
@@ -283,9 +345,7 @@ async def video(pid,s,scene):
         except RuntimeError as e:
             msg=str(e).lower()
             if "too many video status queries" in msg or "api 429" in msg:
-                await asyncio.sleep(poll_backoff)
-                poll_backoff=min(poll_backoff*1.5,30)
-                continue
+                await asyncio.sleep(poll_backoff);poll_backoff=min(poll_backoff*1.5,30);continue
             raise
         status=str(x.get("status","")).lower()
         if status=="completed":break
@@ -294,8 +354,7 @@ async def video(pid,s,scene):
     data=x.get("data") if isinstance(x.get("data"),dict) else {}
     metadata=x.get("metadata") if isinstance(x.get("metadata"),dict) else {}
     url=x.get("url") or x.get("video_url") or data.get("url") or metadata.get("url")
-    if not url:
-        raise RuntimeError("Agnes 视频任务已完成但没有返回视频地址："+json.dumps(x,ensure_ascii=False)[:2000])
+    if not url:raise RuntimeError("Agnes 视频任务已完成但没有返回视频地址："+json.dumps(x,ensure_ascii=False)[:2000])
     await download_url(url,out,timeout=900)
 
 async def gemini_tts(text,out,voice):
