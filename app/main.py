@@ -565,7 +565,7 @@ async def run(pid):
                     concat_copy=["ffmpeg","-y","-f","concat","-safe","0","-i",str(lst),"-c","copy",str(merged)]
                     try:
                         await run_process(concat_copy,check=True)
-                        except subprocess.CalledProcessError:
+                    except subprocess.CalledProcessError:
                         # Stream-copy concat requires identical codecs/time bases/stream layouts.
                         # Agnes clips can legitimately differ, so fall back to filter concat.
                         probe=await run_process(
@@ -589,8 +589,10 @@ async def run(pid):
                         filters.append(labels+f"concat=n={len(vids)}:v=1:a=0[vout]")
                         await run_process(
                             ["ffmpeg","-y",*inputs,"-filter_complex",";".join(filters),
-                             "-map","[vout]","-c:v","libx264","-preset","veryfast","-profile:v","high","-level:v","4.2","-r","30","-fps_mode","cfr","-pix_fmt","yuv420p","-video_track_timescale","90000",
-                             "-movflags","+faststart",str(merged)],
+                             "-map","[vout]","-c:v","libx264","-preset","veryfast",
+                             "-profile:v","high","-level:v","4.2","-r","30",
+                             "-fps_mode","cfr","-pix_fmt","yuv420p",
+                             "-video_track_timescale","90000","-movflags","+faststart",str(merged)],
                             check=True
                         )
                 intro_seconds=await build_character_intro(d,s)
