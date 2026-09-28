@@ -514,7 +514,7 @@ async def run(pid):
                     filters.append(labels+f"concat=n={len(vids)}:v=1:a=0[vout]")
                     subprocess.run(
                         ["ffmpeg","-y",*inputs,"-filter_complex",";".join(filters),
-                         "-map","[vout]","-c:v","libx264","-preset","veryfast","-pix_fmt","yuv420p",
+                         "-map","[vout]","-c:v","libx264","-preset","veryfast","-profile:v","high","-level:v","4.2","-r","30","-fps_mode","cfr","-pix_fmt","yuv420p","-video_track_timescale","90000",
                          "-movflags","+faststart",str(merged)],
                         check=True
                     )
