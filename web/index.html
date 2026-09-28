@@ -34,9 +34,31 @@ async function start(){
   let x=await r.json();pid.value=x.project_id;resume()
 }
 async function resume(){
-  if(!pid.value)return;
-  await fetch("/api/projects/"+pid.value+"/run",{method:"POST"});
-  clearInterval(timer);timer=setInterval(poll,1200);poll()
+  const projectId=pid.value.trim();
+  if(!projectId){
+    errorBox.style.display="block";
+    errorBox.textContent="请先输入项目 ID";
+    return;
+  }
+  clearInterval(timer);
+  timer=setInterval(poll,1200);
+  poll();
+  try{
+    const r=await fetch("/api/projects/"+encodeURIComponent(projectId)+"/run",{
+      method:"POST",
+      headers:{"Accept":"application/json"}
+    });
+    if(!r.ok){
+      const msg=await r.text();
+      throw new Error(msg||("HTTP "+r.status));
+    }
+    const x=await r.json();
+    if(x.already_running) current.textContent="任务正在运行，已自动继续监控";
+  }catch(e){
+    clearInterval(timer);
+    errorBox.style.display="block";
+    errorBox.textContent="继续生成失败：\n"+(e?.message||e);
+  }
 }
 function escapeHtml(v){
   return String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
