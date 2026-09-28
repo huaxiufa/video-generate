@@ -273,10 +273,9 @@ async def video(pid,s,scene):
             last_url=video_input_image(scene.get("last_frame_path","")) if scene.get("last_frame_path") else None
 
             if first_url and last_url:
-                # Agnes v2.0's current gateway validates \`mode\` against its
-                # legacy values: ti2vid / keyframes / multi_reference.
-                # Keep mode and image at the top level; sending the 2.5-style
-                # extra_body.mode causes LiteLLM to reject the request.
+                # The live international gateway validates mode values but the
+                # legacy API reference still documents extra_body.mode. Use the
+                # gateway-compatible top-level keyframe form first.
                 body={
                     "model":"agnes-video-v2.0",
                     "prompt":scene["video_prompt"],
@@ -302,12 +301,6 @@ async def video(pid,s,scene):
                     "width":width,"height":height,"num_frames":num_frames,"frame_rate":frame_rate,
                 }
                 generation_mode="v2.0-text2video"
-        else:
-            size="720P" if model=="agnes-video-2.5-flash" else s["size"]
-            body={"model":model,"mode":"keyframe","prompt":scene["video_prompt"],"seconds":str(seconds),"size":size,"aspect_ratio":s["aspect_ratio"],"n":1}
-            if scene.get("first_frame_path"):body["first_frame"]=data_uri(scene["first_frame_path"])
-            if scene.get("last_frame_path"):body["last_frame"]=data_uri(scene["last_frame_path"])
-            generation_mode="2.5-keyframe"
 
         queue_retries=int(os.getenv("AGNES_VIDEO_QUEUE_RETRIES","20"))
         network_retries=int(os.getenv("AGNES_VIDEO_NETWORK_RETRIES","6"))
