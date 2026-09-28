@@ -627,8 +627,21 @@ def create(x:Req):
     save(pid,s);return s
 @app.post("/api/projects/{pid}/run")
 async def start(pid:str):
-    if not load(pid):raise HTTPException(404,"project not found")
+    s=load(pid)
+    if not s:raise HTTPException(404,"project not found")
     if pid in RUNNING:return {"ok":True,"project_id":pid,"already_running":True}
+    if s.get("status")=="done":
+        for stage in STAGES[5:]:
+            s["stages"][stage]={"status":"pending","progress":0}
+        s["status"]="pending"
+        s["error"]=None
+        s["current_stage"]=5
+        s["current_stage_name"]="脚本编写"
+        s["progress_percent"]=round(5/len(STAGES)*100,1)
+        s["current_item"]=0
+        s["total_items"]=0
+        s["current_detail"]="准备重新生成"
+        save(pid,s)
     RUNNING.add(pid)
     async def wrapped():
         try:
