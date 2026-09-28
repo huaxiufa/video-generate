@@ -1,13 +1,34 @@
-import os, subprocess, sys, tempfile
+import os, subprocess, sys
 from pathlib import Path
+
+from huggingface_hub import snapshot_download
 
 text, reference, output = sys.argv[1:4]
 repo = os.getenv("MOSS_TTS_REPO", "/opt/MOSS-TTS-Nano")
-model_dir = os.getenv("MOSS_TTS_MODEL_DIR", "/data/moss-models")
+model_dir = Path(os.getenv("MOSS_TTS_MODEL_DIR", "/data/moss-models"))
 
-# MOSS ONNX expects 48 kHz PCM WAV for its audio tokenizer.
+
+def ensure_onnx_assets():
+    manifest = model_dir / "MOSS-TTS-Nano-100M-ONNX" / "browser_poc_manifest.json"
+    if manifest.exists():
+        return
+
+    model_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_download(
+        repo_id="OpenMOSS-Team/MOSS-TTS-Nano-100M-ONNX",
+        local_dir=str(model_dir / "MOSS-TTS-Nano-100M-ONNX"),
+        allow_patterns=["*.onnx", "*.data", "*.json", "tokenizer.model"],
+    )
+    snapshot_download(
+        repo_id="OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX",
+        local_dir=str(model_dir / "MOSS-Audio-Tokenizer-Nano-ONNX"),
+        allow_patterns=["*.onnx", "*.data", "*.json"],
+    )
+
+
 normalized_reference = Path(output).with_suffix(".reference.wav")
 try:
+    ensure_onnx_assets()
     subprocess.run([
         "ffmpeg", "-y", "-loglevel", "error",
         "-i", reference,
@@ -17,7 +38,7 @@ try:
 
     cmd = [
         "python", str(Path(repo) / "infer_onnx.py"),
-        "--model-dir", model_dir,
+        "--model-dir", str(model_dir),
         "--prompt-audio-path", str(normalized_reference),
         "--text", text,
         "--output-audio-path", output,
