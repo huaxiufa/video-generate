@@ -51,6 +51,8 @@ def load(pid):
     p=ROOT/pid/"state.json"
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
+PIPELINE_VERSION=3
+
 def save(pid,s):
     d=ROOT/pid
     t=d/"state.tmp"
@@ -357,6 +359,34 @@ async def video(pid,s,scene):
     if not url:raise RuntimeError("Agnes 视频任务已完成但没有返回视频地址："+json.dumps(x,ensure_ascii=False)[:2000])
     await download_url(url,out,timeout=900)
 
+async def build_character_intro(d,s):
+    """Create a short opening slate showing each character reference image and Chinese name."""
+    chars=[c for c in s.get("characters",[]) if c.get("path") and Path(c["path"]).exists() and c.get("name")]
+    intro=d/"character_intro.mp4"
+    if not chars:
+        return 0.0
+    segment_seconds=2.5
+    width,height=1280,720
+    parts=[]
+    for idx,c in enumerate(chars):
+        out=d/"characters"/f"_intro_{idx}.mp4"
+        name=str(c["name"]).replace("'","\\'")
+        img=Path(c["path"])
+        if not out.exists() or out.stat().st_size<1024:
+            vf=(f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
+                f"drawbox=x=0:y=0:w=iw:h=170:color=black@0.58:t=fill,"
+                f"drawtext=fontfile=/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc:"
+                f"text='{name}':fontcolor=white:fontsize=64:x=(w-text_w)/2:y=52")
+            await run_process(["ffmpeg","-y","-loop","1","-i",str(img),"-t",str(segment_seconds),
+                "-vf",vf,"-r","30","-c:v","libx264","-pix_fmt","yuv420p","-an",
+                "-movflags","+faststart",str(out)],check=True)
+        parts.append(out)
+    lst=d/"character_intro_concat.txt"
+    lst.write_text("".join("file '"+p.resolve().as_posix()+"'\n" for p in parts),encoding="utf-8")
+    await run_process(["ffmpeg","-y","-f","concat","-safe","0","-i",str(lst),"-c","copy","-movflags","+faststart",str(intro)],check=True)
+    return segment_seconds*len(parts)
+
 async def run_process(args, **kwargs):
     """Run blocking subprocess work off the FastAPI event loop so status polling stays responsive."""
     return await asyncio.to_thread(subprocess.run, args, **kwargs)
@@ -394,6 +424,17 @@ async def clone_tts(text,sample,out):
 async def run(pid):
     s=load(pid);d=ROOT/pid
     try:
+        if int(s.get("pipeline_version",0)) < PIPELINE_VERSION:
+            for old_stage in ["脚本编写","音频生成","字幕生成","视频拼接"]:
+                s["stages"][old_stage]={"status":"pending","progress":0}
+            for name in ["audio","voices"]:
+                (d/name).mkdir(exist_ok=True)
+            for p in list((d/"audio").glob("*.wav")) + [d/"subtitles.json",d/"subtitles.srt",d/"mix.wav",d/"merged.mp4",d/"final.mp4",d/"character_intro.mp4"]:
+                try: p.unlink()
+                except FileNotFoundError: pass
+            s["pipeline_version"]=PIPELINE_VERSION
+            s["status"]="pending";s["error"]=None
+            save(pid,s)
         s["status"]="running";s["error"]=None;save(pid,s)
         for i,stage in enumerate(STAGES):
             if s["stages"][stage]["status"]=="done":continue
@@ -416,7 +457,7 @@ async def run(pid):
                 beats={x["scene_id"]:x["beat"] for x in r.get("story_beats",[])}
                 for x in s["scenes"]:x["story_beat"]=beats.get(x["id"],x.get("summary",""))
             elif stage=="角色参考图":
-                r=await ai_json("""从故事场景中识别所有重要角色。输出 JSON：{"characters":[{"id":"","name":"","appearance":"","personality":"","voice_style":""}]}。同一个角色必须使用同一个 id。场景："""+json.dumps(s["scenes"],ensure_ascii=False))
+                r=await ai_json("""从故事场景中识别所有重要角色。角色 name 必须使用简体中文姓名或中文称呼；appearance 可以使用英文视觉描述。输出 JSON：{"characters":[{"id":"","name":"","appearance":"","personality":"","voice_style":""}]}。同一个角色必须使用同一个 id。场景："""+json.dumps(s["scenes"],ensure_ascii=False))
                 s["characters"]=r.get("characters",[])
                 total=len(s["characters"])
                 for n,c in enumerate(s["characters"],1):
@@ -427,7 +468,7 @@ async def run(pid):
                 total=len(s["scenes"])
                 for n,x in enumerate(s["scenes"],1):
                     set_detail(pid,s,stage,n,total,"编写场景脚本")
-                    r=await ai_json("""为一个动画场景写可直接用于视频生成的英文 prompt，并提取对白。输出 JSON：{"video_prompt":"","dialogues":[{"character_id":"","text":""}]}. 不要改变剧情。场景："""+json.dumps(x,ensure_ascii=False)+",角色："+json.dumps(s["characters"],ensure_ascii=False))
+                    r=await ai_json("""为一个动画场景写可直接用于视频生成的英文 prompt，并提取对白。video_prompt 必须是英文；dialogues.text 必须是简体中文口语对白，禁止使用英文翻译。输出 JSON：{"video_prompt":"","dialogues":[{"character_id":"","text":""}]}. 不要改变剧情。场景："""+json.dumps(x,ensure_ascii=False)+",角色："+json.dumps(s["characters"],ensure_ascii=False))
                     x.update(r)
                 (d/"script.json").write_text(json.dumps({"story":s.get("story"),"characters":s["characters"],"scenes":s["scenes"]},ensure_ascii=False,indent=2),encoding="utf-8")
             elif stage=="尾帧提示词":
@@ -472,7 +513,7 @@ async def run(pid):
                             await gemini_tts(dia["text"],voice,os.getenv("GEMINI_TTS_VOICE","Kore"))
                         await clone_tts(dia["text"],voice,out)
                         start=cursor+j*slot
-                        subs.append({"start":start,"end":start+slot,"text":ch["name"]+": "+dia["text"],"audio_file":str(out)})
+                        subs.append({"start":start,"end":start+slot,"text":dia["text"],"audio_file":str(out)})
                     cursor+=x["seconds"]
                 s["subtitles"]=subs
                 if not subs:raise RuntimeError("没有识别到对白")
@@ -522,13 +563,14 @@ async def run(pid):
                          "-movflags","+faststart",str(merged)],
                         check=True
                     )
+                intro_seconds=await build_character_intro(d,s)
                 wavs=sorted((d/"audio").glob("*.wav"))
                 if wavs:
                     # Preserve scene/dialogue timing instead of simply concatenating speech.
                     inputs=[];filters=[]
                     for idx,p in enumerate(wavs):
                         q=next((z for z in s.get("subtitles",[]) if z.get("audio_file")==str(p)),None)
-                        delay=int(max(0,float(q["start"]))*1000) if q else 0
+                        delay=int((max(0,float(q["start"]))+intro_seconds)*1000) if q else int(intro_seconds*1000)
                         inputs += ["-i",str(p)]
                         filters.append(f"[{idx}:a]adelay={delay}|{delay}[a{idx}]")
                     labels="".join(f"[a{i}]" for i in range(len(wavs)))
@@ -538,10 +580,29 @@ async def run(pid):
                 cmd=["ffmpeg","-y","-i",str(merged)]
                 if (d/"mix.wav").exists():cmd+=["-i",str(d/"mix.wav")]
                 if (d/"subtitles.srt").exists():
-                    sub=(d/"subtitles.srt").as_posix().replace(":","\\:")
+                    subs=s.get("subtitles",[])
+                    def ts_shift(v):
+                        v=float(v)+intro_seconds
+                        h=int(v//3600);m=int((v%3600)//60);sec=v%60
+                        return "%02d:%02d:%06.3f"%(h,m,sec)
+                    shifted=[]
+                    for n,q in enumerate(subs,1):
+                        shifted += [str(n),ts_shift(q["start"])+" --> "+ts_shift(q["end"]),q["text"],""]
+                    shifted_srt=d/"subtitles_final.srt"
+                    shifted_srt.write_text("\n".join(shifted),encoding="utf-8")
+                    sub=shifted_srt.as_posix().replace(":","\\:")
                     cmd += ["-vf","subtitles="+sub+":fontsdir=/usr/share/fonts/opentype/noto"]
-                cmd+=["-c:v","libx264","-c:a","aac","-shortest",str(d/"final.mp4")]
-                await run_process(cmd,check=True)
+                cmd+=["-c:v","libx264","-c:a","aac","-shortest"]
+                if intro_seconds>0:
+                    body=d/"final_body.mp4"
+                    cmd.append(str(body))
+                    await run_process(cmd,check=True)
+                    intro_list=d/"final_video_concat.txt"
+                    intro_list.write_text("file '"+(d/"character_intro.mp4").resolve().as_posix()+"'\nfile '"+body.resolve().as_posix()+"'\n",encoding="utf-8")
+                    await run_process(["ffmpeg","-y","-f","concat","-safe","0","-i",str(intro_list),"-c","copy","-movflags","+faststart",str(d/"final.mp4")],check=True)
+                else:
+                    cmd.append(str(d/"final.mp4"))
+                    await run_process(cmd,check=True)
             s["stages"][stage]={"status":"done","progress":100};s["current_item"]=s.get("total_items",0);s["current_detail"]="阶段完成";s["current_stage"]=i+1;s["current_stage_name"]=STAGES[i+1] if i+1<len(STAGES) else "完成";s["progress_percent"]=round(((i+1)/len(STAGES))*100,1);save(pid,s)
         s["status"]="done";s["progress_percent"]=100;s["current_stage_name"]="完成";save(pid,s)
     except Exception as e:
@@ -553,7 +614,7 @@ def index():return FileResponse(Path(__file__).parent.parent/"web"/"index.html")
 def create(x:Req):
     if not x.script.strip():raise HTTPException(400,"script 不能为空")
     pid=uuid.uuid4().hex[:12];d=ROOT/pid;d.mkdir()
-    s={"project_id":pid,"script":x.script,"aspect_ratio":x.aspect_ratio,"size":x.size,"status":"pending","current_stage":0,"current_stage_name":STAGES[0],"progress_percent":0,"error":None,"stages":{x:{"status":"pending","progress":0} for x in STAGES}}
+    s={"project_id":pid,"script":x.script,"aspect_ratio":x.aspect_ratio,"size":x.size,"status":"pending","current_stage":0,"current_stage_name":STAGES[0],"progress_percent":0,"error":None,"pipeline_version":PIPELINE_VERSION,"stages":{x:{"status":"pending","progress":0} for x in STAGES}}
     save(pid,s);return s
 @app.post("/api/projects/{pid}/run")
 async def start(pid:str):
