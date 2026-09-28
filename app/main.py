@@ -357,6 +357,10 @@ async def video(pid,s,scene):
     if not url:raise RuntimeError("Agnes 视频任务已完成但没有返回视频地址："+json.dumps(x,ensure_ascii=False)[:2000])
     await download_url(url,out,timeout=900)
 
+async def run_process(args, **kwargs):
+    """Run blocking subprocess work off the FastAPI event loop so status polling stays responsive."""
+    return await asyncio.to_thread(subprocess.run, args, **kwargs)
+
 async def gemini_tts(text,out,voice):
     key=os.getenv("GEMINI_API_KEY")
     if not key:raise RuntimeError("GEMINI_API_KEY 未配置")
@@ -369,7 +373,7 @@ async def gemini_tts(text,out,voice):
         r=await c.post(url,params={"key":key},json=body);r.raise_for_status();data=r.json()
     raw=data["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
     pcm=out.with_suffix(".pcm");pcm.write_bytes(base64.b64decode(raw))
-    subprocess.run(["ffmpeg","-y","-f","s16le","-ar","24000","-ac","1","-i",str(pcm),str(out)],check=True)
+    await run_process(["ffmpeg","-y","-f","s16le","-ar","24000","-ac","1","-i",str(pcm),str(out)],check=True)
     pcm.unlink(missing_ok=True)
 
 async def clone_tts(text,sample,out):
@@ -489,11 +493,11 @@ async def run(pid):
                 merged=d/"merged.mp4"
                 concat_copy=["ffmpeg","-y","-f","concat","-safe","0","-i",str(lst),"-c","copy",str(merged)]
                 try:
-                    subprocess.run(concat_copy,check=True)
+                    await run_process(concat_copy,check=True)
                 except subprocess.CalledProcessError:
                     # Stream-copy concat requires identical codecs/time bases/stream layouts.
                     # Agnes clips can legitimately differ, so fall back to filter concat.
-                    probe=subprocess.run(
+                    probe=await run_process(
                         ["ffprobe","-v","error","-select_streams","v:0",
                          "-show_entries","stream=width,height","-of","csv=s=x:p=0",str(vids[0])],
                         capture_output=True,text=True,check=True
@@ -512,7 +516,7 @@ async def run(pid):
                         )
                     labels="".join(f"[v{i}]" for i in range(len(vids)))
                     filters.append(labels+f"concat=n={len(vids)}:v=1:a=0[vout]")
-                    subprocess.run(
+                    await run_process(
                         ["ffmpeg","-y",*inputs,"-filter_complex",";".join(filters),
                          "-map","[vout]","-c:v","libx264","-preset","veryfast","-profile:v","high","-level:v","4.2","-r","30","-fps_mode","cfr","-pix_fmt","yuv420p","-video_track_timescale","90000",
                          "-movflags","+faststart",str(merged)],
@@ -530,14 +534,14 @@ async def run(pid):
                     labels="".join(f"[a{i}]" for i in range(len(wavs)))
                     filters.append(labels+f"amix=inputs={len(wavs)}:duration=longest:normalize=0[mix]")
                     mix=d/"mix.wav"
-                    subprocess.run(["ffmpeg","-y",*inputs,"-filter_complex",";".join(filters),"-map","[mix]","-c:a","pcm_s16le",str(mix)],check=True)
+                    await run_process(["ffmpeg","-y",*inputs,"-filter_complex",";".join(filters),"-map","[mix]","-c:a","pcm_s16le",str(mix)],check=True)
                 cmd=["ffmpeg","-y","-i",str(merged)]
                 if (d/"mix.wav").exists():cmd+=["-i",str(d/"mix.wav")]
                 if (d/"subtitles.srt").exists():
                     sub=(d/"subtitles.srt").as_posix().replace(":","\\:")
                     cmd += ["-vf","subtitles="+sub+":fontsdir=/usr/share/fonts/opentype/noto"]
                 cmd+=["-c:v","libx264","-c:a","aac","-shortest",str(d/"final.mp4")]
-                subprocess.run(cmd,check=True)
+                await run_process(cmd,check=True)
             s["stages"][stage]={"status":"done","progress":100};s["current_item"]=s.get("total_items",0);s["current_detail"]="阶段完成";s["current_stage"]=i+1;s["current_stage_name"]=STAGES[i+1] if i+1<len(STAGES) else "完成";s["progress_percent"]=round(((i+1)/len(STAGES))*100,1);save(pid,s)
         s["status"]="done";s["progress_percent"]=100;s["current_stage_name"]="完成";save(pid,s)
     except Exception as e:
