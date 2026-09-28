@@ -630,18 +630,32 @@ async def start(pid:str):
     s=load(pid)
     if not s:raise HTTPException(404,"project not found")
     if pid in RUNNING:return {"ok":True,"project_id":pid,"already_running":True}
-    if s.get("status")=="done":
-        for stage in STAGES[5:]:
-            s["stages"][stage]={"status":"pending","progress":0}
-        s["status"]="pending"
-        s["error"]=None
-        s["current_stage"]=5
-        s["current_stage_name"]="脚本编写"
-        s["progress_percent"]=round(5/len(STAGES)*100,1)
-        s["current_item"]=0
-        s["total_items"]=0
-        s["current_detail"]="准备重新生成"
-        save(pid,s)
+    # “继续生成 / 重新生成”从脚本编写开始重新生成下游内容。
+    # 无论项目之前是 done 还是 failed，都不要直接跳到旧的音频/字幕状态。
+    # 视频片段保留并复用（避免无意义地再次消耗 Agnes），但对白音频和最终成品必须清掉。
+    for stage in STAGES[5:]:
+        s["stages"][stage]={"status":"pending","progress":0}
+    d=ROOT/pid
+    (d/"audio").mkdir(exist_ok=True)
+    for p in list((d/"audio").glob("*.wav")) + [
+        d/"subtitles.json",d/"subtitles.srt",d/"subtitles_final.srt",
+        d/"mix.wav",d/"merged.mp4",d/"final.mp4",d/"final_body.mp4",
+        d/"character_intro.mp4",d/"character_intro_concat.txt",
+        d/"final_video_concat.txt"
+    ]:
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            pass
+    s["status"]="pending"
+    s["error"]=None
+    s["current_stage"]=5
+    s["current_stage_name"]="脚本编写"
+    s["progress_percent"]=round(5/len(STAGES)*100,1)
+    s["current_item"]=0
+    s["total_items"]=0
+    s["current_detail"]="准备重新生成"
+    save(pid,s)
     RUNNING.add(pid)
     async def wrapped():
         try:
