@@ -552,15 +552,17 @@ def create(x:Req):
     s={"project_id":pid,"script":x.script,"aspect_ratio":x.aspect_ratio,"size":x.size,"status":"pending","current_stage":0,"current_stage_name":STAGES[0],"progress_percent":0,"error":None,"stages":{x:{"status":"pending","progress":0} for x in STAGES}}
     save(pid,s);return s
 @app.post("/api/projects/{pid}/run")
-def start(pid:str,bg:BackgroundTasks):
+async def start(pid:str):
     if not load(pid):raise HTTPException(404,"project not found")
     if pid in RUNNING:return {"ok":True,"project_id":pid,"already_running":True}
     RUNNING.add(pid)
     async def wrapped():
-        try: await run(pid)
-        finally: RUNNING.discard(pid)
-    bg.add_task(wrapped)
-    return {"ok":True,"project_id":pid}
+        try:
+            await run(pid)
+        finally:
+            RUNNING.discard(pid)
+    asyncio.create_task(wrapped())
+    return {"ok":True,"project_id":pid,"started":True}
 @app.get("/api/agnes/status")
 def agnes_status():
     now=asyncio.get_running_loop().time(); keys=[]
